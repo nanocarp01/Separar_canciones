@@ -1,0 +1,16 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+
+# Configuración local de editores
+.vscode/
+.idea/
+
+# Archivos y carpetas del sistema
+.DS_Store
+Thumbs.db

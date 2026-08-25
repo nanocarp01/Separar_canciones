@@ -1,5 +1,5 @@
 # ============================================================================
-#  Dependencias para la aplicación Demucs + RoFormer + Tkinter
+#  Dependencias para Separar_canciones
 #  Requiere Python 3.10–3.12 (3.12 recomendado por compatibilidad con wheels)
 # ============================================================================
 #
@@ -11,24 +11,49 @@
 # Luego:
 #   pip install -r requirements.txt
 #
-# FFmpeg debe estar instalado en el sistema (audio-separator lo necesita):
+# FFmpeg debe estar instalado en el sistema (audio-separator y demucs lo necesitan):
 #   Windows: winget install -e --id Gyan.FFmpeg
 #   macOS:   brew install ffmpeg
 #   Linux:   sudo apt-get install ffmpeg
 # ============================================================================
 
-# Núcleo GPU
+# ---------- Núcleo GPU ----------
 torch>=2.0
 torchaudio>=2.0
 
-# Motores de separación
+# ---------- Motores de separación ----------
 demucs>=4.0.1
 audio-separator[gpu]>=0.44
 
 # librosa 0.10.x es requerido por audio-separator 0.44 (librosa 1.0 rompe la API)
 librosa==0.10.2.post1
 
-# Utilidades
+# ---------- Análisis de guitarra (guitar_analysis.py) ----------
+# Usa librosa (ya incluido arriba) y matplotlib para el gráfico de acordes.
+matplotlib>=3.8
+
+# NOTA basic-pitch: en Python 3.12 / Windows NO se puede instalar con este
+# archivo (exige tensorflow<2.15.1, que no tiene wheels para cp312).
+# Instálalo aparte con (usa el modelo ONNX incluido, sin TensorFlow):
+#   pip install basic-pitch --no-deps
+#   pip install pretty-midi mir-eval resampy scikit-learn
+#
+# Y el runtime ONNX para la transcripción Audio->MIDI por GPU:
+#   Instala SOLO UNO de los dos (NO ambos a la vez):
+#     - onnxruntime          -> CPU (por defecto, siempre funciona, cae a CPU)
+#     - onnxruntime-gpu==1.26.0 -> GPU CUDA. La versión debe coincidir con el
+#                                  CUDA/cuDNN de tu torch (CUDA 12.8 + cuDNN 9).
+#                                  La app precarga las DLLs de CUDA de PyTorch
+#                                  (preload_dlls) para que onnxruntime enlace
+#                                  con tu GPU. Ejemplo (RTX 5070, torch cu128):
+#   pip install onnxruntime-gpu==1.26.0
+#
+#   Nota: versiones nuevas (>=1.27) vienen compiladas contra CUDA 13 y NO
+#   enlazan con tu torch CUDA 12.8 -> caería a CPU.
+
+# ---------- Utilidades ----------
 numpy>=1.24
 soundfile>=0.12
+# Reproducción de audio en vivo dentro de la GUI (pestaña Multitrack)
+sounddevice>=0.4.6
 ffmpeg-python>=0.2

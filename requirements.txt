@@ -31,12 +31,23 @@ librosa==0.10.2.post1
 # ---------- Análisis de guitarra (guitar_analysis.py) ----------
 # Usa librosa (ya incluido arriba) y matplotlib para el gráfico de acordes.
 matplotlib>=3.8
+# Runtime ONNX base: Basic Pitch cae automáticamente a CPU si no hay CUDA.
+onnxruntime>=1.18
+pretty-midi>=0.2.10
+mir-eval>=0.7
+resampy>=0.4
+scikit-learn>=1.3
+# Separación experimental local de guitarras (NMF + clustering)
+
+# Basic Pitch se instala automáticamente en Python <=3.11. En Python 3.12
+# usa el procedimiento --no-deps documentado abajo por la limitación de TensorFlow.
+basic-pitch>=0.4.0; python_version < "3.12"
 
 # NOTA basic-pitch: en Python 3.12 / Windows NO se puede instalar con este
 # archivo (exige tensorflow<2.15.1, que no tiene wheels para cp312).
 # Instálalo aparte con (usa el modelo ONNX incluido, sin TensorFlow):
 #   pip install basic-pitch --no-deps
-#   pip install pretty-midi mir-eval resampy scikit-learn
+#   (Las dependencias auxiliares ya están incluidas arriba.)
 #
 # Y el runtime ONNX para la transcripción Audio->MIDI por GPU:
 #   Instala SOLO UNO de los dos (NO ambos a la vez):
@@ -46,6 +57,7 @@ matplotlib>=3.8
 #                                  La app precarga las DLLs de CUDA de PyTorch
 #                                  (preload_dlls) para que onnxruntime enlace
 #                                  con tu GPU. Ejemplo (RTX 5070, torch cu128):
+#   pip uninstall -y onnxruntime
 #   pip install onnxruntime-gpu==1.26.0
 #
 #   Nota: versiones nuevas (>=1.27) vienen compiladas contra CUDA 13 y NO

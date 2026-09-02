@@ -1,0 +1,220 @@
+{
+  "format": "model-manifest",
+  "version": 2,
+  "strict": false,
+  "note": "Manifiesto de modelos de separación: procedencia, hash SHA-256, licencia, autor y capacidades. Con 'strict': true la app BLOQUEA cualquier modelo no registrado (compilación distribuible). Con 'strict': false (desarrollo) solo avisa. Los pesos de la comunidad (UVR/RoFormer/MDX) requieren verificación de licencia ANTES de redistribuirlos: el repo MIT no implica pesos comerciales.",
+  "models": [
+    {
+      "id": "demucs.htdemucs",
+      "name": "Demucs htdemucs (4 stems)",
+      "engine": "demucs",
+      "engine_name": "htdemucs",
+      "capabilities": ["vocals", "drums", "bass", "other"],
+      "author": "Meta AI (FAIR) — facebookresearch",
+      "repo": "https://github.com/facebookresearch/demucs",
+      "license": "MIT (código y pesos según repo oficial)",
+      "license_evidence": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
+      "redistribution": "permitida según MIT; verificar términos actuales del repo",
+      "commercial": "permitida según MIT; verificar términos actuales del repo",
+      "files": [
+        {
+          "filename": "955717e8-8726e21a.th",
+          "sha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+          "size": 84141911,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th"
+        }
+      ],
+      "note": "Verificado localmente (SHA-256 calculado el 2026-08-28)."
+    },
+    {
+      "id": "demucs.htdemucs_6s",
+      "name": "Demucs htdemucs_6s (6 stems: + guitarra y piano)",
+      "engine": "demucs",
+      "engine_name": "htdemucs_6s",
+      "capabilities": ["vocals", "drums", "bass", "other", "guitar", "piano"],
+      "author": "Meta AI (FAIR) — facebookresearch",
+      "repo": "https://github.com/facebookresearch/demucs",
+      "license": "MIT (código y pesos según repo oficial)",
+      "license_evidence": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
+      "redistribution": "permitida según MIT; verificar términos actuales del repo",
+      "commercial": "permitida según MIT; verificar términos actuales del repo",
+      "files": [
+        {
+          "filename": "5c90dfd2-34c22ccb.th",
+          "sha256": "34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd",
+          "size": 54996327,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th"
+        }
+      ],
+      "note": "Verificado localmente (SHA-256 calculado el 2026-08-28)."
+    },
+    {
+      "id": "demucs.htdemucs_ft",
+      "name": "Demucs htdemucs_ft (4 stems fine-tuned)",
+      "engine": "demucs",
+      "engine_name": "htdemucs_ft",
+      "capabilities": ["vocals", "drums", "bass", "other"],
+      "author": "Meta AI (FAIR) — facebookresearch",
+      "repo": "https://github.com/facebookresearch/demucs",
+      "license": "MIT (código y pesos según repo oficial)",
+      "license_evidence": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
+      "redistribution": "permitida según MIT; verificar términos actuales del repo",
+      "commercial": "permitida según MIT; verificar términos actuales del repo",
+      "files": [
+        {
+          "filename": "f7e0c4bc-ba3fe64a.th",
+          "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th"
+        },
+        {
+          "filename": "d12395a8-e57c48e6.th",
+          "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th"
+        },
+        {
+          "filename": "92cfc3b6-ef3bcb9c.th",
+          "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th"
+        },
+        {
+          "filename": "04573f0d-f3cf25b2.th",
+          "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th"
+        }
+      ],
+      "note": "htdemucs_ft son 4 conjuntos de pesos promediados; verificados localmente (2026-08-28)."
+    },
+    {
+      "id": "asep.htdemucs_6s_via_uvr",
+      "name": "Demucs v4 · 6 fuentes (vía audio-separator)",
+      "engine": "audio-separator",
+      "configs": ["htdemucs_6s.yaml"],
+      "capabilities": ["vocals", "drums", "bass", "other", "guitar", "piano"],
+      "author": "Meta AI (FAIR) — facebookresearch (config dentro del paquete demucs)",
+      "repo": "https://github.com/facebookresearch/demucs",
+      "license": "MIT (código y pesos según repo oficial)",
+      "license_evidence": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
+      "redistribution": "permitida según MIT; verificar términos actuales del repo",
+      "commercial": "permitida según MIT; verificar términos actuales del repo",
+      "files": [
+        {
+          "filename": "5c90dfd2-34c22ccb.th",
+          "sha256": "34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd",
+          "size": 54996327,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th"
+        }
+      ],
+      "note": "Mismos pesos que demucs.htdemucs_6s; audio-separator usa el YAML como config."
+    },
+    {
+      "id": "asep.htdemucs_ft_via_uvr",
+      "name": "Demucs v4 · 4 fuentes fine-tuned (vía audio-separator)",
+      "engine": "audio-separator",
+      "configs": ["htdemucs_ft.yaml"],
+      "capabilities": ["vocals", "drums", "bass", "other"],
+      "author": "Meta AI (FAIR) — facebookresearch (config dentro del paquete demucs)",
+      "repo": "https://github.com/facebookresearch/demucs",
+      "license": "MIT (código y pesos según repo oficial)",
+      "license_evidence": "https://github.com/facebookresearch/demucs/blob/main/LICENSE",
+      "redistribution": "permitida según MIT; verificar términos actuales del repo",
+      "commercial": "permitida según MIT; verificar términos actuales del repo",
+      "files": [
+        {
+          "filename": "f7e0c4bc-ba3fe64a.th",
+          "sha256": "ba3fe64ae8ef66ac9a4857222ce48efbdc5eb3ad375cb79dd13debee5aaa4066",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/f7e0c4bc-ba3fe64a.th"
+        },
+        {
+          "filename": "d12395a8-e57c48e6.th",
+          "sha256": "e57c48e6b0e38af4f7118d7bd08c49f0a0c0edf7d09143bdd902ea0d237303e6",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/d12395a8-e57c48e6.th"
+        },
+        {
+          "filename": "92cfc3b6-ef3bcb9c.th",
+          "sha256": "ef3bcb9c8b40d14ae5d51b6db2587339cc12c6b77c0be151ce6d69002e087bf2",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/92cfc3b6-ef3bcb9c.th"
+        },
+        {
+          "filename": "04573f0d-f3cf25b2.th",
+          "sha256": "f3cf25b222c4eed7cd49dd8b2c9597d50c18bd154090f7b919cfa5f93cf22c49",
+          "size": 84141271,
+          "origin": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/04573f0d-f3cf25b2.th"
+        }
+      ],
+      "note": "Mismos pesos que demucs.htdemucs_ft; audio-separator usa el YAML como config."
+    },
+    {
+      "id": "asep.bs_roformer_317",
+      "name": "BS-RoFormer · vocals/instrumental (UVR)",
+      "engine": "audio-separator",
+      "configs": [],
+      "capabilities": ["vocals", "instrumental"],
+      "author": "TRvlvr / comunidad UVR (Ultimate Vocal Remover)",
+      "repo": "https://github.com/TRvlvr/model_repo",
+      "license": "PENDIENTE DE VERIFICACIÓN — modelo comunitario; revisar el repo del autor antes de redistribuir",
+      "license_evidence": "https://github.com/TRvlvr/model_repo",
+      "redistribution": "PENDIENTE DE VERIFICACIÓN",
+      "commercial": "PENDIENTE DE VERIFICACIÓN",
+      "files": [
+        {
+          "filename": "model_bs_roformer_ep_317_sdr_12.9755.ckpt",
+          "sha256": "5b84f37e8d444c8cb30c79d77f613a41c05868ff9c9ac6c7049c00aefae115aa",
+          "size": 639331213,
+          "origin": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+        }
+      ],
+      "note": "Hash verificado localmente (2026-08-28); licencia de pesos aún PENDIENTE — NO redistribuir sin verificar."
+    },
+    {
+      "id": "asep.mdx23c_drumsep",
+      "name": "MDX23C DrumSep · batería detallada (UVR)",
+      "engine": "audio-separator",
+      "configs": [],
+      "capabilities": ["drums (kick/snare/toms/hh/ride/crash)"],
+      "author": "jarredou / comunidad UVR (Ultimate Vocal Remover)",
+      "repo": "https://github.com/TRvlvr/model_repo",
+      "license": "PENDIENTE DE VERIFICACIÓN — modelo comunitario; revisar el repo del autor antes de redistribuir",
+      "license_evidence": "https://github.com/TRvlvr/model_repo",
+      "redistribution": "PENDIENTE DE VERIFICACIÓN",
+      "commercial": "PENDIENTE DE VERIFICACIÓN",
+      "files": [
+        {
+          "filename": "MDX23C-DrumSep-aufr33-jarredou.ckpt",
+          "sha256": "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0",
+          "size": 437652699,
+          "origin": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/MDX23C-DrumSep-aufr33-jarredou.ckpt"
+        }
+      ],
+      "note": "Hash verificado localmente (2026-08-28); licencia de pesos aún PENDIENTE — NO redistribuir sin verificar."
+    },
+    {
+      "id": "asep.hp_wind_inst",
+      "name": "HP-Wind Inst · instrumentos de viento (UVR)",
+      "engine": "audio-separator",
+      "configs": [],
+      "capabilities": ["wind instruments (brass / woodwind)"],
+      "author": "comunidad UVR (Ultimate Vocal Remover)",
+      "repo": "https://github.com/TRvlvr/model_repo",
+      "license": "PENDIENTE DE VERIFICACIÓN — modelo comunitario; revisar el repo del autor antes de redistribuir",
+      "license_evidence": "https://github.com/TRvlvr/model_repo",
+      "redistribution": "PENDIENTE DE VERIFICACIÓN",
+      "commercial": "PENDIENTE DE VERIFICACIÓN",
+      "files": [
+        {
+          "filename": "17_HP-Wind_Inst-UVR.pth",
+          "sha256": "acc6d472b4b478da9c9ab5af45b167749e05a7f65b30c7d5988b3700a513aeee",
+          "size": 223661285,
+          "origin": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/17_HP-Wind_Inst-UVR.pth"
+        }
+      ],
+      "note": "Modelo que usa la pestaña 'Instrumentos de Aire'; hash verificado localmente (2026-08-28); licencia PENDIENTE — NO redistribuir sin verificar."
+    }
+  ]
+}

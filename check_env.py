@@ -140,8 +140,8 @@ def main() -> int:
         # Búsqueda exhaustiva (la misma que usa main.py): conocido C:\ffmpeg-local, etc.
         try:
             sys.path.insert(0, str(Path(__file__).parent))
-            from main import _find_ffmpeg_dir as _ffd  # type: ignore
-            auto_dir = _ffd()
+            from ffmpeg_utils import find_ffmpeg_dir
+            auto_dir = find_ffmpeg_dir()
         except Exception:  # noqa: BLE001
             auto_dir = None
 
@@ -173,6 +173,41 @@ def main() -> int:
             print(f"OK onnxruntime  {ort.__version__}")
     else:
         print(f"NO onnxruntime NO instalado ->  {err}")
+    print()
+
+    # --- manifiesto de modelos (hashes y licencias) -----------------
+    line()
+    print("Manifiesto de modelos (hashes SHA-256 y licencias):")
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        import model_manifest as mm
+        entries = mm.verify_manifest()
+        mode = mm.manifest_mode()
+        strict_txt = ("ESTRICTO (bloquea modelos no auditados)" if mode == "strict"
+                      else "desarrollo (solo avisa)")
+        print(f"  Modo: {strict_txt}")
+        print(f"  Manifiesto: {mm.manifest_path()}")
+        for e in entries:
+            tag = {
+                "ok": "OK",
+                "hash_pending": "SIN HASH",
+                "missing": "NO ENCONTRADO",
+                "partial": "PARCIAL",
+                "hash_mismatch": "HASH NO COINCIDE",
+            }.get(e["status"], "?")
+            print(f"  [{tag}] {e['id']}  ({e['license']})")
+            for r in e["files"]:
+                if r["missing"]:
+                    print(f"          x falta: {r['filename']}")
+                elif r["hash_pending"]:
+                    print(f"          ! sin hash registrado: {r['filename']}  "
+                          "(python model_manifest.py --register)")
+                elif r["hash_mismatch"]:
+                    print(f"          x HASH NO COINCIDE: {r['filename']}")
+                else:
+                    print(f"          v {r['filename']}  sha256 {r['actual_sha256'][:16]}...")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  No se pudo leer el manifiesto: {exc}")
     print()
 
     line()

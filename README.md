@@ -1,12 +1,18 @@
 # 🎵 Separador Musical + 🎸 Transcripción de Guitarra (Tkinter)
 
-Aplicación de escritorio (Tkinter) organizada en **3 pestañas** que **separa
-fuentes de audio**, reproduce cada pista **en vivo dentro de la app**, mezcla
-multitrack y **analiza guitarra** desde una misma ventana.
+Aplicación de escritorio nativa (Tkinter/ttk) con tema oscuro que separa
+fuentes de audio, ejecuta cadenas de modelos especializadas, reproduce cada
+pista en vivo, mezcla multitrack y analiza guitarra desde una misma ventana.
 
 ## 🖥️ Qué hace
 
-**1. Separación de fuentes** con **3 motores**:
+**1. Separación de fuentes y cadenas avanzadas**:
+
+La separación base usa Demucs o `audio-separator`. Después pueden encadenarse
+modelos encontrados dinámicamente en el catálogo instalado para limpieza de
+voz live, lead/rhythm guitar, brass, woodwind o saxophone. La app no inventa
+nombres de modelos: solo habilita modelos realmente presentes en el catálogo.
+
 
 | # | Motor | Modelos | Stems |
 |---|-------|---------|-------|
@@ -16,6 +22,22 @@ multitrack y **analiza guitarra** desde una misma ventana.
 
 Y un **post-procesador estéreo** (Mid / Side / L / R) sobre `guitar.wav` o
 `piano.wav`.
+
+### Cadena de modelos especializados
+
+En la sección **Cadena avanzada** se activan dinámicamente las operaciones que
+el catálogo instalado realmente soporta:
+
+* **Desfiltrar público / voz live** — busca modelos de limpieza vocal.
+* **Separar guitarras lead / rhythm** — requiere que el catálogo describa
+  salidas `lead` y `rhythm`; no usa la separación por paneo.
+* **Aislar instrumentos de aire** — busca modelos de brass, woodwind o
+  saxophone.
+
+Cada etapa procesa el stem más adecuado (`vocals`, `guitar` u `other`), guarda
+sus resultados con nombres únicos y los incorpora al mixer. Si un modelo no
+está disponible, la opción queda desactivada en vez de fingir una separación
+especializada.
 
 **Filtro Mid/Side de cancelación de fase (karaoke / limpiar público):** para
 temas en vivo, donde el cantante está paneado al centro y el público en los
@@ -29,18 +51,35 @@ Se puede aplicar **automáticamente tras separar** (pestaña 1, con selector de
 modo) o **por pista desde la pestaña 2** (botón 🎛️ en cada fila del mixer,
 que reemplaza el WAV al guardar).
 
-**3. 🎚️ Mezclador multitrack** — carga **automáticamente** los stems separados
-con botones **▶ ⏸ ⏹** que suenan **dentro del propio programa**, **mute (M)**,
-**solo (S)** y **volumen** por pista con un **master global**, y permite
-generar/descargar una mezcla WAV respetando esos ajustes.
+**3. 🎚️ Mezclador multitrack** — carga **automáticamente** todos los WAV
+separados, incluidos stems especializados, con botones **▶ ⏸ ⏹**, mute, solo,
+volumen, exportación individual y master global. Permite generar/descargar una
+mezcla WAV respetando esos ajustes.
+
+**Pestañas especializadas:** la separación principal conserva solo los motores
+originales. Las guitarras y los instrumentos de aire se procesan desde sus
+pestañas independientes, reutilizando stems ya generados cuando están
+presentes, sin repetir el render principal.
+
+En **🎸 Separación de Guitarras** también existe el método local experimental
+**NMF + análisis de notas**. Descompone `guitar.wav` en componentes espectrales,
+los agrupa en dos fuentes y reconstruye `guitar_1.wav` y `guitar_2.wav` con
+máscaras suaves. No requiere descargar un modelo ni conexión a Internet; no
+etiqueta lead/rhythm y debe considerarse una separación aproximada. El número
+de componentes puede ajustarse entre 8 y 32: valores mayores suelen conservar
+más detalle, pero requieren más tiempo y memoria.
+
+**Tema y fluidez:** la interfaz usa una paleta oscura nativa de Tk/ttk. La
+separación, mezcla, análisis de afinación/acordes y generación MIDI corren en
+workers; las actualizaciones vuelven al hilo principal mediante `queue.Queue`.
 
 **2. 🎸 Análisis y Transcripción de Guitarra** (pestaña 3): sobre un WAV de
 guitarra (p. ej. `guitar.wav` de la separación, que se carga automáticamente):
 
 * **Afinación estimada** — detecta la cuerda grave (f0 con `librosa`) y
   la compara con afinaciones conocidas (Estándar, Drop D, medio tono…).
-* **Línea de tiempo de acordes** — croma + plantillas; se muestra en texto
-  y como figura en una ventana aparte.
+* **Línea de tiempo de acordes** — croma + plantillas, agrupación de acordes
+  consecutivos y gráfico Matplotlib incrustado en una ventana Tkinter.
 * **Audio → MIDI** — transcripción con **Basic Pitch** (Spotify), archivo
   `.mid` compatible con TuxGuitar / Guitar Pro.
 
@@ -51,8 +90,8 @@ guitarra (p. ej. `guitar.wav` de la separación, que se carga automáticamente):
   las DLLs de CUDA de PyTorch (`onnxruntime.preload_dlls()`) y usa
   `onnxruntime-gpu` compilado contra tu mismo CUDA/cuDNN. Cae a CPU si no hay
   GPU compatible.
-* **Afinación y acordes (librosa)** → corren en CPU (rapidísimos; librosa no
-  acelera por GPU), en paralelo sin bloquear la separación.
+* **Afinación y acordes (librosa)** → corren en CPU (librosa no acelera por GPU),
+  en un worker sin bloquear la interfaz.
 
 La separación corre en un **hilo secundario** con soporte automático de
 **GPU CUDA**, incluyendo **NVIDIA RTX 5070 Laptop** (Blackwell, sm_120):
@@ -64,13 +103,17 @@ La separación corre en un **hilo secundario** con soporte automático de
 ## 📁 Estructura
 
 ```
-main.py              App de escritorio por pestañas (entrada principal)
+app.py               Punto de entrada recomendado compatible con main.py
+main.py              App de escritorio por pestañas (implementación principal)
 playback.py          Motor de reproducción de audio en vivo (sounddevice)
 guitar_analysis.py   Afinación, acordes y transcripción Audio → MIDI
 midside.py           Filtro Mid/Side de cancelación de fase (karaoke / público)
 ffmpeg_utils.py      Detección de FFmpeg y GPU CUDA
 separation.py        Utilidades de separación/mix (opcional)
 check_env.py         Diagnóstico del entorno
+model_manifest.json  Manifiesto de modelos: hashes SHA-256, licencias y procedencia
+model_manifest.py    Verificador del manifiesto (--check / --register / --verify)
+stem_quality.py      Calidad de stems: detección de silencios y reconstrucción
 ```
 
 ---
@@ -138,7 +181,7 @@ o manualmente:
 
 ```bash
 .venv\Scripts\activate   # Windows
-python main.py
+python app.py
 ```
 
 > ⚠️ En Windows, si escribes simplemente `python main.py` desde una terminal
@@ -146,11 +189,11 @@ python main.py
 > aunque tengas RTX. Usa `run.bat` para garantizar el venv con CUDA.
 
 1. **Cargar archivo** (MP3/WAV/FLAC/OGG/M4A).
-2. Elegir **motor**:
+2. Elegir uno de los modelos originales de separación principal.
    * *Demucs — 4 fuentes* → separación clásica rápida
    * *Demucs — 6 fuentes* → añade guitarra + piano
    * *RoFormer / MDXC* → modelos UVR de mejor calidad, GPU recomendado
-3. (RoFormer) Elegir **modelo** entre la lista curada.
+3. (RoFormer) Elegir **modelo** entre el catálogo disponible.
 4. (Opcional) Marcar **post-procesamiento estéreo**.
 5. **Empezar separación**.
 6. Al terminar se abre la carpeta con los `.wav`.
@@ -164,7 +207,7 @@ programa** (▶⏸⏹), silenciar (M), solo (S), ajustar volumen y usar el
 
 En la **pestaña 3 · Análisis y Transcripción**:
 
-7. Se carga automáticamente `guitar.wav` (o `bass.wav` si no hay guitarra) al
+7. Se carga automáticamente `guitar.wav`, una salida especializada o `bass.wav` si no hay guitarra al
    separar; también puedes pulsar **🎸 Cargar Guitarra** y elegir otro WAV.
 8. **🔍 Analizar Guitarra** → muestra afinación y línea de tiempo de acordes
    (la figura sale en una ventana aparte).
@@ -193,7 +236,8 @@ C:\Users\tu_usuario\Music\Separador_Musical\<canción>\
 >
 > ```bash
 > pip install basic-pitch --no-deps
-> pip install onnxruntime pretty-midi mir-eval resampy scikit-learn
+>   # onnxruntime, pretty-midi, mir-eval, resampy y scikit-learn ya están en requirements.txt
+
 > ```
 
 ---
@@ -201,13 +245,14 @@ C:\Users\tu_usuario\Music\Separador_Musical\<canción>\
 ## 🧠 ¿Cómo funciona?
 
 * **3 motores** usan la librería que prefieras (Demucs o audio-separator).
+  `app.py` es el punto de entrada recomendado y mantiene `main.py` y los
+  módulos anteriores para compatibilidad.
 * **Filtro Mid/Side**: la transformación `Mid = (L+R)/2` y `Side = (L−R)/2`
   separa lo central (voz) de lo lateral (público/ambiente). Según el modo
   elegido se mezclan con distintas ganancias y se normaliza el pico para
   evitar clipping.
 * El **análisis de guitarra** usa `librosa` (afinación/acordes) y Basic Pitch
-  (MIDI) de forma **bloqueante junto a la GUI**: los botones se deshabilitan
-  mientras corre y vuelven a activarse al terminar.
+  (MIDI) en workers independientes; la GUI permanece disponible mientras corre.
 * Toda la inferencia corre en `threading.Thread(daemon=True)`.
 * La **reproducción en vivo** usa `sounddevice` con un **stream continuo
   (callback de PortAudio)** y carga el archivo en un hilo aparte, así
@@ -226,6 +271,47 @@ C:\Users\tu_usuario\Music\Separador_Musical\<canción>\
     * `guitar_R.wav`  — sólo canal derecho
     * `guitar_Mid.wav` — `(L + R) / 2`
     * `guitar_Side.wav` — `(L - R) / 2`
+
+---
+
+## 🛡️ Manifiesto de modelos y política anti-stems falsos
+
+Inspirado en el prompt *Limbus Split Pro*: la app **no finge separaciones**.
+
+**1. Manifiesto de modelos (`model_manifest.json`)**
+
+Cada modelo que la app puede usar tiene una entrada con procedencia, autor,
+licencia, capacidades, tamaño esperado y **hash SHA-256**. Los pesos de la
+comunidad (UVR / RoFormer / MDX) están marcados como **PENDIENTE DE
+VERIFICACIÓN**: que el repo sea MIT no implica que los pesos sean
+redistribuibles o comerciales.
+
+```bash
+python model_manifest.py --check              # estado de todos los modelos
+python model_manifest.py --verify <archivo>   # hash de un archivo concreto
+python model_manifest.py --register <archivo> # calcular hash y generar el JSON
+```
+
+Modos:
+
+* **desarrollo** (por defecto, `"strict": false`) — al elegir un modelo no
+  registrado la app avisa una vez, pero continúa. La barra inferior lo indica.
+* **estricto** (`"strict": true`) — la app **bloquea** cualquier modelo sin
+  hash / licencia registrados (compilación distribuible).
+
+Para auditar un modelo nuevo: verifica la licencia de los pesos, ejecuta
+`--register` y pega el JSON en `model_manifest.json`.
+
+**2. Política anti-stems falsos**
+
+Tras cada separación la app analiza los WAV generados (`stem_quality.py`):
+
+* **Pista casi silenciosa** (pico < -60 dBFS) → se marca con **⚠** en el
+  mezclador, se avisa al terminar y nunca se presenta como audio real. Si el
+  modelo no puede separar ese instrumento, mejor deshabilitarlo que inventarlo.
+* **Reconstrucción de la mezcla** → si los stems cubren el set completo
+  (vocals + drums + bass + other), la suma se compara con el original y se
+  avisa si difiere más de 3 dB.
 
 ---
 

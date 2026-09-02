@@ -39,6 +39,16 @@ from guitar_analysis import (
     audio_to_midi,
 )
 from midside import MIDSIDE_PRESETS, apply_midside_filter
+from guitar_separation import separate_guitars_experimental
+from model_manifest import (
+    is_registered,
+    manifest_mode,
+)
+from stem_quality import (
+    validate_stems,
+    check_reconstruction,
+    format_report,
+)
 
 # Mapea la etiqueta del Combobox (españa UI) a la clave interna del filtro
 MIDSIDE_LABEL_TO_KEY = {label: key for key, label, _hint in MIDSIDE_PRESETS}
@@ -103,8 +113,24 @@ except Exception as exc:  # noqa: BLE001
 # Constantes
 # ---------------------------------------------------------------------------
 APP_TITLE = "Separador Musical + Guitarra"
-APP_VERSION = "3.0"
+APP_VERSION = "4.0"
 PROGRAM_FOLDER = "Separador_Musical"
+
+# Colores del tema oscuro nativo Tk/ttk.
+DARK_BG = "#1e1e2e"
+DARK_PANEL = "#27273a"
+DARK_FIELD = "#313149"
+DARK_TEXT = "#f5f5f5"
+DARK_MUTED = "#b7b7c9"
+DARK_ACCENT = "#7c3aed"
+DARK_SUCCESS = "#55d187"
+DARK_ERROR = "#ff6b6b"
+DARK_INFO = "#79b8ff"
+
+SPECIAL_TASKS = {
+    "guitar": ("lead", "rhythm", "guitar"),
+    "air": ("brass", "woodwind", "saxophone", "wind"),
+}
 
 
 def _music_dir() -> Path:
@@ -234,6 +260,11 @@ class AudioSeparatorApp:
         self.message_queue: "queue.Queue[tuple[str, object]]" = queue.Queue()
         self.worker_thread: Optional[threading.Thread] = None
         self.is_processing: bool = False
+        self._asep_catalog: dict[str, dict] = {}
+        self.special_catalog: dict[str, dict] = {"guitar": {}, "air": {}}
+        self.special_state: dict[str, dict] = {}
+        self.guitar_method_var: Optional[tk.StringVar] = None
+        self.guitar_components_var: Optional[tk.StringVar] = None
 
         # Stems separados (para la pestaña multitrack)
         self.stems: dict[str, str] = {}       # nombre interno -> ruta wav
@@ -258,12 +289,63 @@ class AudioSeparatorApp:
 
         # Bandera para avisar una sola vez si corre en CPU teniendo GPU
         self._warned_cpu = True
+        # Manifiesto de modelos (modelos ya avisados por sesión) y calidad de stems
+        self._manifest_warned: set[str] = set()
+        self.stem_quality: dict[str, dict] = {}
 
+        self._configure_dark_theme()
         self._build_ui()
         self._check_environment()
         self.root.after(120, self._poll_queue)
 
     # ------------------------------------------------------------------ UI
+
+    def _configure_dark_theme(self) -> None:
+        """Configura una apariencia oscura usando únicamente Tk/ttk."""
+        self.root.configure(bg=DARK_BG)
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure(".", background=DARK_BG, foreground=DARK_TEXT, fieldbackground=DARK_FIELD)
+        style.configure("TFrame", background=DARK_BG)
+        style.configure("TLabelframe", background=DARK_BG, foreground=DARK_TEXT, bordercolor="#4d4d68")
+        style.configure("TLabelframe.Label", background=DARK_BG, foreground=DARK_TEXT)
+        style.configure("TLabel", background=DARK_BG, foreground=DARK_TEXT)
+        style.configure("TButton", background=DARK_PANEL, foreground=DARK_TEXT, bordercolor="#555577", padding=6)
+        style.map("TButton", background=[("active", DARK_ACCENT)])
+        style.configure("TCheckbutton", background=DARK_BG, foreground=DARK_TEXT)
+        style.configure("TRadiobutton", background=DARK_BG, foreground=DARK_TEXT)
+        style.configure(
+            "TCombobox",
+            fieldbackground=DARK_FIELD,
+            background=DARK_PANEL,
+            foreground=DARK_TEXT,
+            darkcolor=DARK_FIELD,
+            lightcolor=DARK_FIELD,
+            bordercolor="#555577",
+            arrowcolor=DARK_TEXT,
+            selectbackground=DARK_ACCENT,
+            selectforeground="#ffffff",
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", DARK_FIELD), ("disabled", "#222235")],
+            foreground=[("readonly", DARK_TEXT), ("disabled", DARK_MUTED)],
+            selectbackground=[("readonly", DARK_ACCENT)],
+            selectforeground=[("readonly", "#ffffff")],
+        )
+        # La lista desplegable es un widget Tk independiente del Combobox.
+        self.root.option_add("*TCombobox*Listbox.background", DARK_FIELD)
+        self.root.option_add("*TCombobox*Listbox.foreground", DARK_TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground", DARK_ACCENT)
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        style.configure("TNotebook", background=DARK_BG, bordercolor=DARK_BG)
+        style.configure("TNotebook.Tab", background=DARK_PANEL, foreground=DARK_TEXT, padding=(10, 5))
+        style.map("TNotebook.Tab", background=[("selected", DARK_ACCENT)])
+        style.configure("Horizontal.TScale", background=DARK_BG, troughcolor=DARK_FIELD)
+        style.configure("TProgressbar", troughcolor=DARK_FIELD, background=DARK_ACCENT)
 
     def _build_ui(self) -> None:
         # Fuentes compartidas guardadas como atributos (los métodos de tab las usan)
@@ -279,13 +361,13 @@ class AudioSeparatorApp:
         # Cabecera
         header = ttk.Frame(self.root)
         header.pack(fill="x", padx=16, pady=(12, 4))
-        ttk.Label(header, text="🎵  Separador Musical + Guitarra",
+        ttk.Label(header, text="🎵  Separador Musical Avanzado + Guitarra",
                   font=self._f_title).pack(anchor="w")
         ttk.Label(
             header,
-            text=("Demucs · RoFormer · librosa · Basic Pitch — usa la RTX 5070 "
+            text=("Demucs · RoFormer · herramientas opcionales · Basic Pitch — usa la RTX 5070 "
                   "cuando esté disponible."),
-            font=self._f_sub, foreground="#5f6368",
+            font=self._f_sub, foreground=DARK_MUTED,
         ).pack(anchor="w")
 
         # Notebook con las 3 pestañas
@@ -293,6 +375,8 @@ class AudioSeparatorApp:
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(4, 0))
 
         self._build_separar_tab()
+        self._build_guitars_tab()
+        self._build_air_tab()
         self._build_multitrack_tab()
         self._build_guitarra_tab()
 
@@ -302,17 +386,282 @@ class AudioSeparatorApp:
 
         self._on_mode_changed()
 
+    def _build_chain_controls(self, parent) -> None:
+        """Compatibilidad interna: las operaciones ahora viven en pestañas propias."""
+        frame = ttk.LabelFrame(parent, text=" Herramientas avanzadas ", padding=8)
+        frame.pack(fill="x", padx=12, pady=4)
+        ttk.Label(frame, text="Las separaciones especializadas están disponibles en sus pestañas independientes.",
+                  foreground=DARK_MUTED, wraplength=700).pack(anchor="w")
+        self.chain_frame = ttk.Frame(frame)
+        self.chain_frame.pack(fill="x", pady=(5, 0))
+        ttk.Label(self.chain_frame, text="Usa 'Separación de Guitarras' o 'Instrumentos de Aire' para no alterar el render principal.", foreground=DARK_MUTED, wraplength=700).pack(anchor="w")
+
+    def _refresh_special_model_controls(self) -> None:
+        # Método conservado para compatibilidad con configuraciones antiguas.
+        return
+        if not hasattr(self, "chain_frame"):
+            return
+        for child in self.chain_frame.winfo_children():
+            child.destroy()
+        self.chain_vars.clear()
+        self.chain_model_vars.clear()
+        for task, (_key, tokens) in SPECIAL_TASKS.items():
+            matches = self._models_for_tokens(tokens)
+            enabled = bool(matches)
+            var = tk.BooleanVar(value=False)
+            model_var = tk.StringVar(value=matches[0] if matches else "No disponible")
+            self.chain_vars.append(var)
+            self.chain_model_vars.append(model_var)
+            row = ttk.Frame(self.chain_frame)
+            row.pack(fill="x", pady=2)
+            ttk.Checkbutton(row, text=task, variable=var, state="normal" if enabled else "disabled").pack(side="left")
+            ttk.Combobox(row, textvariable=model_var, values=matches or ["No disponible"],
+                         state="readonly" if enabled else "disabled", width=58).pack(side="left", padx=8)
+            if not enabled:
+                ttk.Label(row, text="(no encontrado en el catálogo)", foreground=DARK_MUTED).pack(side="left")
+
+    def _models_for_tokens(self, tokens: tuple[str, ...]) -> list[str]:
+        result = []
+        for filename, info in self._asep_catalog.items():
+            info = info if isinstance(info, dict) else {}
+            haystack = " ".join([
+                filename, str(info.get("Name", "")),
+                " ".join(map(str, info.get("Stems", []) or [])),
+            ]).lower()
+            if tokens == ("lead", "rhythm", "guitar"):
+                matches = "lead" in haystack and "rhythm" in haystack
+            else:
+                matches = any(token in haystack for token in tokens)
+            if matches:
+                result.append(filename)
+        return sorted(result)
+
+    def _selected_chain(self) -> list[str]:
+        selected = []
+        for var, model_var in zip(self.chain_vars, self.chain_model_vars):
+            if var.get() and model_var.get() != "No disponible":
+                selected.append(model_var.get())
+        return selected
+
+    def _build_special_tab(self, kind: str, title: str, default_tokens: tuple[str, ...],
+                           input_names: tuple[str, ...]) -> None:
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text=title)
+        state = {"kind": kind, "input": None, "output": None, "running": False}
+        self.special_state[kind] = state
+        self._build_special_tab_contents(tab, kind, input_names, state)
+
+    def _build_special_tab_contents(self, tab, kind: str, input_names: tuple[str, ...], state: dict) -> None:
+        source = ttk.LabelFrame(tab, text=" Fuente de audio ", padding=10)
+        source.pack(fill="x", padx=12, pady=(12, 6))
+        state["label"] = ttk.Label(source, text="Carga un WAV o usa un stem de la última separación.",
+                                    foreground=DARK_MUTED, wraplength=600)
+        state["label"].pack(side="left", fill="x", expand=True)
+        ttk.Button(source, text="📁 Cargar WAV",
+                   command=lambda: self._load_special_source(kind, input_names)).pack(side="right")
+        ttk.Button(source, text="🔄 Buscar stem",
+                   command=lambda: self._find_special_source(kind, input_names)).pack(side="right", padx=5)
+
+        model_box = ttk.LabelFrame(tab, text=" Modelo especializado disponible ", padding=10)
+        model_box.pack(fill="x", padx=12, pady=4)
+        state["model_var"] = tk.StringVar(value="Cargando catálogo…")
+        state["model_combo"] = ttk.Combobox(model_box, textvariable=state["model_var"],
+                                             state="readonly", width=68)
+        state["model_combo"].pack(side="left")
+        ttk.Button(model_box, text="↻ Actualizar", command=lambda: self._load_special_catalog(kind)).pack(side="left", padx=8)
+        state["hint"] = ttk.Label(model_box, text="", foreground=DARK_MUTED, wraplength=700)
+        state["hint"].pack(anchor="w", pady=(6, 0))
+
+        state["status"] = ttk.Label(tab, text="Listo.", foreground=DARK_MUTED, wraplength=700)
+        state["status"].pack(anchor="w", padx=12, pady=8)
+        state["progress"] = ttk.Progressbar(tab, mode="indeterminate")
+        state["progress"].pack(fill="x", padx=12)
+        state["start"] = ttk.Button(tab, text="▶ Separar", command=lambda: self._start_special(kind))
+        state["start"].pack(pady=12, ipadx=24, ipady=5)
+        ttk.Label(tab, text="Las salidas se guardan junto al stem fuente y pueden cargarse en el mixer.",
+                  foreground=DARK_MUTED).pack(pady=4)
+        self.root.after(200, lambda: self._load_special_catalog(kind))
+        self.root.after(300, lambda: self._find_special_source(kind, input_names))
+
+    def _build_guitars_tab(self) -> None:
+        tab = ttk.Frame(self.notebook)
+        self.notebook.add(tab, text="🎸 Separación de Guitarras")
+        state = {"kind": "guitar", "input": None, "output": None, "running": False}
+        self.special_state["guitar"] = state
+        self._build_special_tab_contents(tab, "guitar", ("guitar", "guitarra"), state)
+        method_box = ttk.LabelFrame(tab, text=" Método local ", padding=10)
+        method_box.pack(fill="x", padx=12, pady=4, before=state["status"])
+        self.guitar_method_var = tk.StringVar(value="NMF + análisis de notas (experimental)")
+        ttk.Combobox(method_box, textvariable=self.guitar_method_var,
+                     values=["NMF + análisis de notas (experimental)",
+                             "Modelo especializado del catálogo"],
+                     state="readonly", width=48).pack(side="left")
+        ttk.Label(method_box, text="Componentes:").pack(side="left", padx=(16, 6))
+        self.guitar_components_var = tk.StringVar(value="16")
+        ttk.Combobox(method_box, textvariable=self.guitar_components_var,
+                     values=["8", "12", "16", "24", "32"],
+                     state="readonly", width=6).pack(side="left")
+        state["model_combo"].config(state="disabled")
+        state["hint"].config(text="Método experimental activo: no requiere modelo descargado.")
+        self.guitar_method_var.trace_add("write", lambda *_: self._toggle_guitar_method())
+
+    def _toggle_guitar_method(self) -> None:
+        state = self.special_state["guitar"]
+        experimental = self.guitar_method_var is not None and self.guitar_method_var.get().startswith("NMF")
+        state["model_combo"].config(state="disabled" if experimental else "readonly")
+        if experimental:
+            state["hint"].config(text="NMF + pitch: genera guitar_1.wav y guitar_2.wav sin modelo externo.")
+        else:
+            state["hint"].config(text="Usa un modelo especializado si aparece en el catálogo.")
+
+    def _build_air_tab(self) -> None:
+        self._build_special_tab("air", "🎺 Instrumentos de Aire",
+                                SPECIAL_TASKS["air"], ("other", "instrumental", "accompaniment"))
+
+    def _load_special_catalog(self, kind: str) -> None:
+        state = self.special_state[kind]
+        if not ASEP_AVAILABLE:
+            state["model_var"].set("audio-separator no disponible")
+            state["model_combo"]["values"] = ["audio-separator no disponible"]
+            return
+        try:
+            sep = AudioSeparator()
+            catalog = sep.get_simplified_model_list() or {}
+            tokens = SPECIAL_TASKS[kind]
+            models = []
+            for filename, info in catalog.items():
+                info = info if isinstance(info, dict) else {}
+                text = " ".join([filename, str(info.get("Name", "")),
+                                 " ".join(map(str, info.get("Stems", []) or []))]).lower()
+                if (kind == "guitar" and "lead" in text and "rhythm" in text) or \
+                   (kind == "air" and any(token in text for token in tokens)):
+                    models.append(filename)
+            self.special_catalog[kind] = {name: catalog[name] for name in models}
+            state["model_combo"]["values"] = models or ["No hay modelos compatibles en el catálogo"]
+            state["model_var"].set(models[0] if models else "No hay modelos compatibles en el catálogo")
+            state["hint"].config(text=(f"{len(models)} modelo(s) compatible(s)." if models else
+                                        "Instala una versión/catálogo que incluya este tipo de separación."))
+        except Exception as exc:
+            state["model_var"].set("No se pudo leer el catálogo")
+            state["model_combo"]["values"] = ["No se pudo leer el catálogo"]
+            state["hint"].config(text=str(exc))
+
+    def _load_special_source(self, kind: str, names: tuple[str, ...]) -> None:
+        path = filedialog.askopenfilename(title="Seleccionar fuente WAV",
+                                          filetypes=[("WAV", "*.wav"), ("Audio", "*.wav *.flac *.mp3"), ("Todos", "*.*")])
+        if path:
+            self._set_special_source(kind, path)
+
+    def _find_special_source(self, kind: str, names: tuple[str, ...]) -> None:
+        candidates = []
+        if self.last_run_out:
+            candidates.extend(Path(self.last_run_out).glob("*.wav"))
+        for folder in [self.output_dir]:
+            candidates.extend(folder.glob("**/*.wav"))
+        for candidate in candidates:
+            stem = candidate.stem.lower()
+            if any(stem == name or stem.startswith(name + "_") for name in names):
+                self._set_special_source(kind, str(candidate))
+                return
+
+    def _set_special_source(self, kind: str, path: str) -> None:
+        state = self.special_state[kind]
+        state["input"] = path
+        state["label"].config(text=f"Fuente: {path}", foreground=DARK_TEXT)
+
+    def _start_special(self, kind: str) -> None:
+        state = self.special_state[kind]
+        model = state["model_var"].get()
+        source = state["input"]
+        if not source or not os.path.exists(source):
+            messagebox.showwarning("Sin fuente", "Carga o busca primero el stem fuente.")
+            return
+        experimental = kind == "guitar" and self.guitar_method_var is not None and self.guitar_method_var.get().startswith("NMF")
+        if not experimental and (not model or model.startswith("No ") or "no disponible" in model.lower()):
+            messagebox.showwarning("Sin modelo", "No hay un modelo especializado compatible disponible.")
+            return
+        if state["running"]:
+            return
+        output_dir = Path(source).parent / f"{kind}_separado"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        state["running"] = True
+        state["start"].config(state="disabled")
+        state["progress"].start(15)
+        state["status"].config(text=f"Procesando {Path(source).name} con {model}…", foreground=DARK_INFO)
+        if experimental:
+            components = int(self.guitar_components_var.get()) if self.guitar_components_var else 16
+            threading.Thread(target=self._guitar_experimental_worker,
+                             args=(source, output_dir, components), daemon=True,
+                             name="guitar-nmf-worker").start()
+        else:
+            threading.Thread(target=self._special_worker, args=(kind, source, model, output_dir),
+                             daemon=True, name=f"{kind}-separator-worker").start()
+
+    def _guitar_experimental_worker(self, source: str, output_dir: Path, components: int) -> None:
+        try:
+            files = separate_guitars_experimental(
+                source, output_dir, n_components=components,
+                progress=lambda text: self.message_queue.put(("special_status", ("guitar", text))),
+            )
+            self.message_queue.put(("special_done", ("guitar", str(output_dir), files)))
+        except Exception as exc:
+            self.message_queue.put(("special_error", ("guitar", str(exc))))
+
+    def _special_worker(self, kind: str, source: str, model: str, output_dir: Path) -> None:
+        try:
+            self._run_asep(source, model, output_dir)
+            files = sorted(output_dir.glob("*.wav"))
+            self.message_queue.put(("special_done", (kind, str(output_dir), files)))
+        except Exception as exc:
+            self.message_queue.put(("special_error", (kind, str(exc))))
+
+    def _finish_special(self, kind: str, folder: str, files) -> None:
+        state = self.special_state[kind]
+        state["running"] = False
+        state["output"] = folder
+        state["start"].config(state="normal")
+        state["progress"].stop()
+
+        # Política anti-stems falsos: marca pistas casi silenciosas.
+        report = validate_stems([str(p) for p in files])
+        self.stem_quality.update({r["path"]: r for r in report})
+        silent = [r for r in report if r.get("silent")]
+        text = f"✅ Generados {len(files)} archivo(s) en {folder}"
+        color = DARK_SUCCESS
+        if silent:
+            names_s = ", ".join(Path(r["path"]).name for r in silent)
+            text += f"  ·  ⚠ {len(silent)} casi silenciosa(s): {names_s}"
+            color = "#ffb86b"
+            messagebox.showwarning(
+                "Stems casi silenciosos",
+                "La separación generó pista(s) casi silenciosa(s):\n"
+                f"{names_s}\n\n"
+                "El modelo no encontró señal en esa banda. Se marcan como ⚠ "
+                "en el mezclador y no deben presentarse como pistas reales.",
+            )
+        state["status"].config(text=text, foreground=color)
+        if files:
+            self._populate_mixer(folder, files)
+
+    def _error_special(self, kind: str, error: str) -> None:
+        state = self.special_state[kind]
+        state["running"] = False
+        state["start"].config(state="normal")
+        state["progress"].stop()
+        state["status"].config(text="❌ Error", foreground=DARK_ERROR)
+        messagebox.showerror("Separación especializada", error)
+
     # ---------------------------------------------------- Tab 1 · Separar
     def _build_separar_tab(self) -> None:
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="🎛️  1 · Separar Pistas")
+        self.notebook.add(tab, text="🎛️  Separador Avanzado")
 
         # 1) Archivo
         file_frame = ttk.LabelFrame(tab, text=" Archivo de audio ", padding=10)
         file_frame.pack(fill="x", padx=12, pady=(12, 6))
         self.file_label = ttk.Label(
             file_frame, text="Ningún archivo seleccionado",
-            foreground="gray", wraplength=520, font=("Segoe UI", 10),
+            foreground=DARK_MUTED, wraplength=520, font=("Segoe UI", 10),
         )
         self.file_label.pack(side="left", fill="x", expand=True)
         ttk.Button(file_frame, text="📁  Cargar",
@@ -329,7 +678,7 @@ class AudioSeparatorApp:
         )
         self.mode_combo.pack(side="left")
         self.mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_mode_changed())
-        self.mode_desc = ttk.Label(mode_frame, text="", foreground="#5f6368")
+        self.mode_desc = ttk.Label(mode_frame, text="", foreground=DARK_MUTED)
         self.mode_desc.pack(side="left", padx=(12, 0))
 
         self.sub_frame = ttk.Frame(tab)
@@ -338,7 +687,7 @@ class AudioSeparatorApp:
         self.model_combo = ttk.Combobox(
             self.sub_frame, textvariable=self.model_var, state="readonly", width=60,
         )
-        self.model_var2_desc = ttk.Label(self.sub_frame, text="", foreground="#5f6368")
+        self.model_var2_desc = ttk.Label(self.sub_frame, text="", foreground=DARK_MUTED)
         self.model_combo.bind(
             "<<ComboboxSelected>>", lambda _e: self._update_model_desc()
         )
@@ -355,7 +704,7 @@ class AudioSeparatorApp:
         ttk.Label(
             post_frame,
             text="Útil cuando el tema tiene guitarras paneadas a lados distintos.",
-            foreground="#5f6368",
+            foreground=DARK_MUTED,
         ).pack(anchor="w", pady=(2, 0))
 
         # Filtro Mid/Side para limpiar el público de la voz (temas en vivo)
@@ -379,7 +728,7 @@ class AudioSeparatorApp:
             post_frame,
             text="Para directos: el cantante está al centro y el público en los "
                  "laterales. 'Conservar centro' quita el público estéreo de la voz.",
-            foreground="#5f6368",
+            foreground=DARK_MUTED,
         ).pack(anchor="w", pady=(2, 0))
 
         # Estado + botón
@@ -405,17 +754,17 @@ class AudioSeparatorApp:
             tab,
             text=("Al terminar, las pistas pasan a la pestaña 2 · Multitrack "
                   "para reproducirlas y mezclarlas."),
-            foreground="#5f6368", font=self._f_sub,
+            foreground=DARK_MUTED, font=self._f_sub,
         ).pack(pady=(0, 8))
 
     # --------------------------------------------------- Tab 2 · Multitrack
     def _build_multitrack_tab(self) -> None:
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="🎚️  2 · Multitrack")
+        self.notebook.add(tab, text="🎚️  Mezclador Multitrack")
 
         self.mt_header = ttk.Label(
             tab, text="Aún no hay pistas separadas. Ve a la pestaña 1 y separa una canción.",
-            foreground="gray", wraplength=560,
+            foreground=DARK_MUTED, wraplength=560,
         )
         self.mt_header.pack(anchor="w", padx=12, pady=(12, 6))
 
@@ -424,7 +773,7 @@ class AudioSeparatorApp:
         self.mt_canvas_frame.pack(fill="both", expand=True, padx=12)
 
         # Datos para la mezcla
-        self.mt_info = ttk.Label(tab, text="", foreground="#5f6368", wraplength=580)
+        self.mt_info = ttk.Label(tab, text="", foreground=DARK_MUTED, wraplength=580)
         self.mt_info.pack(anchor="w", padx=12, pady=(4, 0))
 
         # Reproductor maestro (en vivo dentro de la app)
@@ -442,7 +791,7 @@ class AudioSeparatorApp:
         self.master_val_lbl = ttk.Label(master_frame, text="100%", width=6)
         self.master_val_lbl.pack(side="left")
         self.now_playing_lbl = ttk.Label(master_frame, text="Nada sonando.",
-                                         foreground="#5f6368", wraplength=220)
+                                         foreground=DARK_MUTED, wraplength=220)
         self.now_playing_lbl.pack(side="left", padx=(12, 0))
 
         # Controles de mezcla
@@ -453,7 +802,7 @@ class AudioSeparatorApp:
             command=self._on_make_mix, state="disabled",
         )
         self.mix_btn.pack(side="left")
-        self.mix_status = ttk.Label(mix_frame, text="", foreground="#2e7d32")
+        self.mix_status = ttk.Label(mix_frame, text="", foreground=DARK_SUCCESS)
         self.mix_status.pack(side="left", padx=(12, 0))
         ttk.Button(mix_frame, text="⬇ Descargar mezcla (.wav)",
                    command=self._on_save_mix).pack(side="right")
@@ -469,7 +818,7 @@ class AudioSeparatorApp:
             row,
             text="Elige un WAV de guitarra (p. ej. guitar.wav de la separación) o "
                  "usa el que se cargó de la Tab 2.",
-            foreground="gray", wraplength=460,
+            foreground=DARK_MUTED, wraplength=460,
         )
         self.guitar_label.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="🎸 Cargar Guitarra",
@@ -486,14 +835,15 @@ class AudioSeparatorApp:
         chord_frame.pack(fill="x", padx=12, pady=4)
         self.chords_out = tk.Text(
             chord_frame, height=8, wrap="word", state="disabled",
-            bg="#f6f6f6", font=("Segoe UI", 10),
+            bg=DARK_FIELD, fg=DARK_TEXT, insertbackground=DARK_TEXT,
+            font=("Segoe UI", 10),
         )
         self.chords_out.pack(fill="x")
         ttk.Label(
             chord_frame,
             text="La línea de tiempo de acordes también se muestra como imagen en una "
                  "ventana aparte (botón Ver Gráfico).",
-            foreground="#5f6368",
+            foreground=DARK_MUTED,
         ).pack(anchor="w", pady=(4, 0))
         self.show_chords_btn = ttk.Button(
             chord_frame, text="📈 Ver Gráfico de Acordes",
@@ -507,7 +857,7 @@ class AudioSeparatorApp:
         self.midi_btn = ttk.Button(midi_frame, text="🎹 Generar MIDI",
                                    command=self._on_midi, state="disabled")
         self.midi_btn.pack(side="left")
-        self.midi_status_label = ttk.Label(midi_frame, text="", foreground="#2e7d32",
+        self.midi_status_label = ttk.Label(midi_frame, text="", foreground=DARK_SUCCESS,
                                            wraplength=480)
         self.midi_status_label.pack(side="left", padx=(12, 0))
 
@@ -564,13 +914,17 @@ class AudioSeparatorApp:
         try:
             sep = AudioSeparator()  # type: ignore[misc]
             catalog = sep.get_simplified_model_list() or {}
+            if not isinstance(catalog, dict):
+                catalog = {}
         except Exception:  # noqa: BLE001
             catalog = {}
+        self._asep_catalog = catalog
         curated_filenames = {fn for fn, _label, _desc in ASEP_CURATED_MODELS}
         ordered: list[tuple[str, str, str]] = list(ASEP_CURATED_MODELS)
         for fn, info in catalog.items():
             if fn in curated_filenames:
                 continue
+            info = info if isinstance(info, dict) else {}
             name = info.get("Name") or fn
             stems = info.get("Stems") or []
             label = f"{name}  ({fn})"
@@ -605,7 +959,7 @@ class AudioSeparatorApp:
         if not TORCH_AVAILABLE:
             self.env_label.config(
                 text=f"⚠ PyTorch no instalado.  {TORCH_IMPORT_ERROR}",
-                foreground="#c62828",
+                foreground=DARK_ERROR,
             )
             self.start_btn.config(state="disabled")
             return
@@ -614,7 +968,7 @@ class AudioSeparatorApp:
                 text=("⚠ No hay motor de separación disponible.\n"
                       f"  Demucs: {DEMUCS_IMPORT_ERROR}\n"
                       f"  audio-separator: {ASEP_IMPORT_ERROR}"),
-                foreground="#c62828",
+                foreground=DARK_ERROR,
             )
             self.start_btn.config(state="disabled")
             return
@@ -622,12 +976,12 @@ class AudioSeparatorApp:
         if not DEMUCS_AVAILABLE:
             self.env_label.config(
                 text=f"⚠ Demucs no disponible: {DEMUCS_IMPORT_ERROR}",
-                foreground="#c62828",
+                foreground=DARK_ERROR,
             )
         if not ASEP_AVAILABLE:
             self.env_label.config(
                 text=f"⚠ audio-separator no disponible: {ASEP_IMPORT_ERROR}",
-                foreground="#c62828",
+                foreground=DARK_ERROR,
             )
 
         gpu_msg = ""
@@ -644,7 +998,7 @@ class AudioSeparatorApp:
         if cuda_available():
             self.env_label.config(
                 text=gpu_msg + ffmpeg_msg + "Prioridad GPU en separación y MIDI.",
-                foreground="#2e7d32",
+                foreground=DARK_SUCCESS,
             )
         else:
             # Muestra build de torch para diagnosticar (p. ej. +cpu vs +cu128)
@@ -658,7 +1012,7 @@ class AudioSeparatorApp:
                    + f"{py_path}\n\n"
                    + "Si tienes NVIDIA, cierra y usa run.bat "
                    + "(lanza el .venv de este proyecto, el que tiene CUDA).")
-            self.env_label.config(text=msg, foreground="#ef6c00")
+            self.env_label.config(text=msg, foreground="#ffb86b")
             if self._warned_cpu:  # avisar una sola vez por sesión
                 messagebox.showwarning(
                     "Corriendo con CPU",
@@ -674,6 +1028,18 @@ class AudioSeparatorApp:
                     )
                 )
                 self._warned_cpu = False
+
+        # Manifiesto de modelos: indica el modo (desarrollo vs estricto).
+        try:
+            if manifest_mode() == "strict":
+                manifest_note = ("\n🧾 Manifiesto de modelos: modo ESTRICTO — los "
+                                 "modelos no auditados se bloquean.")
+            else:
+                manifest_note = ("\n🧾 Manifiesto de modelos: modo DESARROLLO (no "
+                                 "estricto) — los modelos no auditados solo avisan.")
+            self.env_label.config(text=self.env_label.cget("text") + manifest_note)
+        except Exception:  # noqa: BLE001
+            pass
 
         if not SOUNDDEVICE_AVAILABLE:
             # Avisar una vez (best effort) si no se puede reproducir en la app
@@ -719,7 +1085,7 @@ class AudioSeparatorApp:
                 "se intentará igualmente.",
             )
         self.input_file = path
-        self.file_label.config(text=path, foreground="black")
+        self.file_label.config(text=path, foreground=DARK_TEXT)
 
     def _on_start(self) -> None:
         if self.is_processing:
@@ -740,6 +1106,10 @@ class AudioSeparatorApp:
             )
             return
 
+        if ASEP_AVAILABLE and not self._asep_catalog:
+            # El catálogo se carga solo cuando hace falta; así no bloquea el arranque.
+            self._refresh_model_list()
+
         if mode == self.MODE_ROFORMER and not cuda_available():
             if not messagebox.askyesno(
                 "RoFormer en CPU",
@@ -751,7 +1121,7 @@ class AudioSeparatorApp:
         self.is_processing = True
         self.start_btn.config(state="disabled")
         self.progress.start(15)
-        self.status_label.config(text="Iniciando…", foreground="#1565c0")
+        self.status_label.config(text="Iniciando…", foreground=DARK_INFO)
 
         kwargs = {
             "input_path": self.input_file,
@@ -776,6 +1146,39 @@ class AudioSeparatorApp:
             self.start_btn.config(state="normal")
             self.progress.stop()
             return
+
+        # Manifiesto de modelos: bloquea (modo estricto) o avisa (desarrollo)
+        # cuando el modelo elegido no está auditado (sin hash/licencia).
+        if is_registered(kwargs["engine_model"]) is None:
+            strict = manifest_mode() == "strict"
+            base_msg = (
+                f"'{kwargs['engine_model']}' no está registrado en el manifiesto "
+                "de modelos (model_manifest.json):\n\n"
+                "  • sin hash SHA-256 verificado\n"
+                "  • licencia de los pesos no documentada\n\n"
+            )
+            if strict:
+                messagebox.showerror(
+                    "Modelo no auditado (modo estricto)",
+                    base_msg
+                    + "El modo estricto bloquea la separación con modelos no "
+                    "registrados.\n\nPara auditarlo:\n"
+                    "  1) verificá la licencia de los pesos\n"
+                    "  2) python model_manifest.py --register <archivo>\n"
+                    "  3) pegá el JSON en model_manifest.json\n\n"
+                    "O poné 'strict': false solo para desarrollo.",
+                )
+                return
+            if kwargs["engine_model"] not in self._manifest_warned:
+                self._manifest_warned.add(kwargs["engine_model"])
+                messagebox.showwarning(
+                    "Modelo no auditado",
+                    base_msg
+                    + "Compilación de DESARROLLO (manifiesto no estricto): se "
+                    "continúa igualmente, pero no redistribuyas el resultado "
+                    "como producto.\n\nPara auditarlo:\n"
+                    "  python model_manifest.py --register <archivo>",
+                )
 
         self.worker_thread = threading.Thread(
             target=self._run_separation, kwargs=kwargs, daemon=True
@@ -815,7 +1218,6 @@ class AudioSeparatorApp:
                 self._run_asep(input_path, engine_model, run_out)
             else:
                 raise RuntimeError(f"Motor desconocido: {engine}")
-
             if clean_vocals:
                 self.message_queue.put((
                     "status",
@@ -830,7 +1232,12 @@ class AudioSeparatorApp:
                 self._apply_midside(run_out)
 
             saved = sorted(p for p in run_out.iterdir() if p.suffix.lower() == ".wav")
-            self.message_queue.put(("done", (str(run_out), saved)))
+            # Política anti-stems falsos: verifica señal real en cada WAV y que
+            # la suma de stems reconstruya la mezcla (si hay set completo).
+            quality_report = validate_stems([str(p) for p in saved])
+            stems_map = {Path(p).stem: str(p) for p in saved}
+            recon = check_reconstruction(str(src), stems_map)
+            self.message_queue.put(("done", (str(run_out), saved, quality_report, recon)))
 
         except Exception as exc:  # noqa: BLE001
             tb = traceback.format_exc()
@@ -863,6 +1270,28 @@ class AudioSeparatorApp:
         self.message_queue.put(("status", "[Demucs] Guardando archivos WAV…"))
         sample_rate = getattr(separator, "samplerate", 44100)
         self._save_dict_as_wav(separated, run_out, sample_rate)
+
+    def _run_model_chain(self, run_out: Path, models: list[str]) -> None:
+        """Compatibilidad heredada; las operaciones se lanzan desde pestañas propias."""
+        for index, model in enumerate(models, 1):
+            candidates = sorted(run_out.glob("*.wav"))
+            if not candidates:
+                return
+            model_lower = model.lower()
+            if any(token in model_lower for token in ("lead", "rhythm", "guitar")):
+                preferred = ("guitar", "other", "instrumental", "vocals")
+            elif any(token in model_lower for token in ("brass", "woodwind", "sax", "wind")):
+                preferred = ("other", "instrumental", "vocals")
+            else:
+                preferred = ("vocals", "vocal", "other", "instrumental")
+            source = next((p for p in candidates if any(token in p.stem.lower() for token in preferred)), candidates[0])
+            stage_dir = run_out / f"cadena_{index:02d}_{_sanitize_folder_name(Path(model).stem)}"
+            stage_dir.mkdir(exist_ok=True)
+            self.message_queue.put(("status", f"[Cadena {index}/{len(models)}] {model} sobre {source.name}…"))
+            self._run_asep(str(source), model, stage_dir)
+            for generated in stage_dir.glob("*.wav"):
+                target = run_out / f"{Path(source).stem}_{generated.name}"
+                shutil.copyfile(generated, target)
 
     def _run_asep(self, input_path: str, model_filename: str, run_out: Path) -> None:
         import tempfile
@@ -910,11 +1339,11 @@ class AudioSeparatorApp:
 
     @staticmethod
     def _clean_asep_name(filename: str) -> Optional[str]:
+        """Normaliza los nombres heterogéneos que devuelven modelos UVR."""
         m = re.search(r"\(([^)]+)\)", filename)
-        if not m:
-            return None
-        stem = m.group(1).strip().lower().replace(" ", "_")
-        return f"{stem}.wav"
+        stem = m.group(1) if m else Path(filename).stem
+        stem = re.sub(r"[^a-zA-Z0-9_-]+", "_", stem.strip().lower()).strip("_-")
+        return f"{stem}.wav" if stem else None
 
     def _save_dict_as_wav(self, separated: dict, folder: Path, sr: int) -> list[Path]:
         if sf is None:
@@ -1011,12 +1440,18 @@ class AudioSeparatorApp:
                     p = cand
             stem_name = self._normalize_stem(p.stem)
             if stem_name:
+                # Evita que dos salidas con la misma etiqueta oculten una pista.
+                base_name = stem_name
+                suffix = 2
+                while stem_name in stems:
+                    stem_name = f"{base_name}_{suffix}"
+                    suffix += 1
                 stems[stem_name] = str(p)
 
         if not stems:
             self.mt_header.config(
                 text="No se reconocieron pistas en esta carpeta.",
-                foreground="#c62828",
+                foreground=DARK_ERROR,
             )
             return
 
@@ -1026,36 +1461,42 @@ class AudioSeparatorApp:
         self.mt_header.config(
             text=f"Pistas separadas — {len(stems)} · ▶ reproduce en la app, "
                  f"silencia (M), solo (S) y ajusta volumen de cada una.",
-            foreground="#2e7d32",
+            foreground=DARK_SUCCESS,
         )
 
-        # Crea una fila por stem (orden estable)
+        # Crea una fila por TODOS los WAV generados: también incluye salidas
+        # especializadas (lead, rhythm, brass, woodwind, etc.).
         order = ["vocals", "drums", "bass", "other", "guitar", "piano"]
-        for stem_name in order:
-            if stem_name not in stems:
-                continue
+        ordered_names = [name for name in order if name in stems]
+        ordered_names.extend(sorted(name for name in stems if name not in ordered_names))
+        for stem_name in ordered_names:
             self._build_mixer_row(stem_name, stems[stem_name])
 
         self.mix_btn.config(state="normal")
         self._set_mix_info("Usa mute/solo/volumen y pulsa 'Generar y Reproducir Mezcla'.")
 
     def _normalize_stem(self, base: str) -> Optional[str]:
-        """Convierte 'guitar', 'Guitar', 'vocals' etc. a nombre interno."""
-        b = base.lower()
-        for key in ("guitar", "piano", "vocals", "vocals_", "vocal", "drums",
-                    "bass", "other", "instrumental", "accompaniment"):
-            if b.startswith(key):
-                # 'instrumental'/'accompaniment' -> other
-                if key in ("instrumental", "accompaniment"):
-                    return "other"
-                return key
-        return None
+        """Devuelve una clave segura sin descartar stems especializados."""
+        b = re.sub(r"^\d+[_ -]*", "", base.lower()).strip(" _-")
+        if not b or b in {"mezcla_multitrack", "mix"}:
+            return None
+        aliases = {
+            "vocal": "vocals", "vocals": "vocals", "drum": "drums", "drums": "drums",
+            "bass": "bass", "guitar": "guitar", "piano": "piano", "other": "other",
+            "instrumental": "other", "accompaniment": "other",
+        }
+        if b in aliases:
+            return aliases[b]
+        # Conserva sufijos (guitar_lead, guitar_L, etc.) como canales distintos.
+        return re.sub(r"[^a-z0-9_-]+", "_", b).strip("_-") or None
 
     def _build_mixer_row(self, name: str, path: str) -> None:
         frame = ttk.Frame(self.mt_canvas_frame, padding=4)
         frame.pack(fill="x", pady=2)
 
         label = STEM_LABELS.get(name, name.capitalize())
+        if self.stem_quality.get(path, {}).get("silent"):
+            label = f"{label}  ⚠"
         ttk.Label(frame, text=label, width=14).pack(side="left")
 
         # Volumen
@@ -1086,11 +1527,27 @@ class AudioSeparatorApp:
         ttk.Button(btn_frame, text="🎛️", width=3,
                    command=lambda n=name: self._on_midside_filter(n),
                    ).pack(side="left", padx=1)
+        ttk.Button(btn_frame, text="⬇ WAV", width=6,
+                   command=lambda n=name: self._on_export_stem(n)).pack(side="left", padx=1)
 
         self.mixer_rows[name] = {
             "frame": frame, "vol": vol, "val_lbl": val_lbl, "path": path,
             "mute": mute, "solo": solo, "checked": [mute, solo],
         }
+
+    def _on_export_stem(self, name: str) -> None:
+        row = self.mixer_rows.get(name)
+        if not row or not os.path.exists(row["path"]):
+            messagebox.showinfo("Exportar WAV", "La pista no está disponible.")
+            return
+        destination = filedialog.asksaveasfilename(title=f"Exportar {name}", defaultextension=".wav",
+                                                   initialfile=f"{name}.wav", filetypes=[("WAV", "*.wav")])
+        if destination:
+            try:
+                shutil.copyfile(row["path"], destination)
+                self._set_mix_info(f"✅ Stem exportado: {destination}")
+            except Exception as exc:
+                messagebox.showerror("Exportar WAV", str(exc))
 
     # ------------------------- Filtro Mid/Side por pista (karaoke / público)
     def _on_midside_filter(self, name: str) -> None:
@@ -1121,7 +1578,7 @@ class AudioSeparatorApp:
         for key, mode_label, hint in MIDSIDE_PRESETS:
             ttk.Radiobutton(win, text=mode_label, value=key, variable=var,
                             ).pack(anchor="w", padx=14)
-            ttk.Label(win, text=hint, foreground="#5f6368", wraplength=460,
+            ttk.Label(win, text=hint, foreground=DARK_MUTED, wraplength=460,
                       justify="left").pack(anchor="w", padx=(28, 14))
 
         def _apply() -> None:
@@ -1277,7 +1734,7 @@ class AudioSeparatorApp:
             messagebox.showerror("Reproducir", f"No se pudo reproducir:\n{exc}")
 
     def _set_mix_info(self, text: str) -> None:
-        self.mt_info.config(text=text, foreground="#1565c0")
+        self.mt_info.config(text=text, foreground=DARK_INFO)
 
     # ------------------------------------------------- Mezcla
     def _active_gains(self) -> dict[str, float]:
@@ -1302,42 +1759,67 @@ class AudioSeparatorApp:
         if not self.stems:
             messagebox.showinfo("Sin pistas", "Primero separa una canción.")
             return
+        out_path = self._mix_path()
+        if not out_path:
+            return
+        gains = self._active_gains()
+        self.mix_btn.config(state="disabled")
+        self.mix_status.config(text="⏳ Generando mezcla…", foreground=DARK_INFO)
+        threading.Thread(target=self._mix_worker, args=(out_path, gains),
+                         daemon=True, name="mix-worker").start()
+
+    def _mix_worker(self, out_path: str, gains: dict[str, float]) -> None:
         try:
-            gains = self._active_gains()
-            out_path = self._mix_path()
             self._render_mix(out_path, gains)
-            self.mix_status.config(
-                text=f"✅ Mezcla creada. ({'GPU/CPU' if cuda_available() else 'CPU'})",
-                foreground="#2e7d32",
-            )
-            # Reproduce la mezcla en vivo dentro de la app
-            if self.playback is not None and SOUNDDEVICE_AVAILABLE:
-                self._active_track = None  # la mezcla no es una pista individual
-                self.playback.play(
-                    out_path, volume=1.0, master=self.master_var.get() / 100.0,
-                )
-                self._set_mix_info("🎧 Reproduciendo la mezcla en vivo...")
-            else:
-                self._play_file_external(out_path)
+            self.message_queue.put(("mix_done", out_path))
         except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            messagebox.showerror("Mezcla", f"Error al mezclar:\n{exc}")
+            self.message_queue.put(("mix_error", str(exc)))
+
+    def _on_mix_finished(self, out_path: str) -> None:
+        self.mix_btn.config(state="normal")
+        self.mix_status.config(text="✅ Mezcla creada.", foreground=DARK_SUCCESS)
+        if self.playback is not None and SOUNDDEVICE_AVAILABLE:
+            self._active_track = None
+            self.playback.play(out_path, volume=1.0,
+                               master=self.master_var.get() / 100.0)
+            self._set_mix_info("🎧 Reproduciendo la mezcla en vivo…")
+        else:
+            self._play_file_external(out_path)
+
+    def _on_mix_error(self, error: str) -> None:
+        self.mix_btn.config(state="normal")
+        self.mix_status.config(text="❌ Error al generar la mezcla.", foreground=DARK_ERROR)
+        messagebox.showerror("Mezcla", error)
 
     def _render_mix(self, out_path: str, gains: dict[str, float]) -> None:
         if sf is None:
             raise RuntimeError("soundfile no disponible.")
+        import numpy as _np
         mixed, sr = None, None
         for name, path in self.stems.items():
             if not os.path.exists(path):
                 continue
-            y, s = sf.read(path, always_2d=True)
-            g = gains.get(name, 1.0)
-            mixed = y * g if mixed is None else mixed + y * g
-            sr = s
-        if mixed is None:
+            y, s = sf.read(path, always_2d=True, dtype="float32")
+            if mixed is None:
+                mixed = _np.zeros_like(y, dtype="float32")
+                sr = s
+            if int(s) != int(sr):
+                raise RuntimeError(f"La pista '{name}' tiene una frecuencia de muestreo incompatible.")
+            if y.shape[1] != mixed.shape[1]:
+                if y.shape[1] == 1 and mixed.shape[1] == 2:
+                    y = _np.repeat(y, 2, axis=1)
+                elif y.shape[1] == 2 and mixed.shape[1] == 1:
+                    mixed = _np.repeat(mixed, 2, axis=1)
+                else:
+                    raise RuntimeError(f"Canales incompatibles en '{name}'.")
+            if len(y) < len(mixed):
+                y = _np.pad(y, ((0, len(mixed) - len(y)), (0, 0)))
+            elif len(y) > len(mixed):
+                mixed = _np.pad(mixed, ((0, len(y) - len(mixed)), (0, 0)))
+            mixed += y * float(gains.get(name, 1.0))
+        if mixed is None or sr is None:
             raise RuntimeError("No hay pistas para mezclar.")
-        import numpy as _np
-        mixed = _np.clip(mixed, -1.0, 1.0)  # evita saturación
+        mixed = _np.clip(mixed, -1.0, 1.0)
         sf.write(out_path, mixed, sr)
 
     def _on_save_mix(self) -> None:
@@ -1361,12 +1843,14 @@ class AudioSeparatorApp:
     # ================================================= GUITARRA (Tab 3)
     # ------------------------------------------------- Carga automática
     def _load_guitar_from_mixer(self) -> None:
-        """Carga automáticamente guitar.wav separado en la Tab 3 (si existe)."""
-        if "guitar" in self.stems and self.stems["guitar"]:
-            self.analysis_audio = self.stems["guitar"]
+        """Carga el stem de guitarra o una salida lead/rhythm si existe."""
+        guitar_key = next((key for key in self.stems
+                           if key == "guitar" or "guitar" in key or key in {"lead", "rhythm"}), None)
+        if guitar_key and self.stems[guitar_key]:
+            self.analysis_audio = self.stems[guitar_key]
             self.guitar_label.config(
-                text=f"Guitarra cargada automáticamente: {os.path.basename(self.stems['guitar'])}",
-                foreground="#2e7d32",
+                text=f"Guitarra cargada automáticamente: {os.path.basename(self.stems[guitar_key])}",
+                foreground=DARK_SUCCESS,
             )
             self.analyze_btn.config(state="normal")
             self.midi_btn.config(state="normal")
@@ -1375,7 +1859,7 @@ class AudioSeparatorApp:
             self.analysis_audio = self.stems["bass"]
             self.guitar_label.config(
                 text=f"No hay guitar.wav; se cargó bass.wav: {os.path.basename(self.stems['bass'])}",
-                foreground="#5f6368",
+                foreground=DARK_MUTED,
             )
             self.analyze_btn.config(state="normal")
             self.midi_btn.config(state="normal")
@@ -1391,7 +1875,7 @@ class AudioSeparatorApp:
         if not path:
             return
         self.analysis_audio = path
-        self.guitar_label.config(text=path, foreground="black")
+        self.guitar_label.config(text=path, foreground=DARK_TEXT)
         self.analyze_btn.config(state="normal")
         self.midi_btn.config(state="normal")
         self._set_chords("— WAV cargado. Pulsa 'Analizar Guitarra' para ver "
@@ -1410,21 +1894,31 @@ class AudioSeparatorApp:
         if not self.analysis_audio:
             messagebox.showwarning("Sin archivo", "Carga primero un WAV de guitarra.")
             return
+        audio = self.analysis_audio
         self.analyze_btn.config(state="disabled")
-        self.root.update_idletasks()
+        self._set_chords("⏳ Analizando afinación y acordes en segundo plano…")
+        threading.Thread(target=self._analysis_worker, args=(audio,), daemon=True,
+                         name="guitar-analysis-worker").start()
+
+    def _analysis_worker(self, audio: str) -> None:
         try:
-            tuning = estimate_tuning(self.analysis_audio)
-            chords, fig = detect_chords(self.analysis_audio)
-            self._last_chords_fig = fig
-            self.tuning_out.config(text=tuning, foreground="#2e7d32")
-            self._set_chords(chords)
-            # habilita el botón de gráfico
-            self.show_chords_btn.config(state="normal")
+            tuning = estimate_tuning(audio)
+            chords, fig = detect_chords(audio)
+            self.message_queue.put(("analysis_done", (tuning, chords, fig)))
         except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            messagebox.showerror("Error en análisis", str(exc))
-        finally:
-            self.analyze_btn.config(state="normal")
+            self.message_queue.put(("analysis_error", str(exc)))
+
+    def _on_analysis_finished(self, result) -> None:
+        tuning, chords, fig = result
+        self._last_chords_fig = fig
+        self.tuning_out.config(text=tuning, foreground=DARK_SUCCESS)
+        self._set_chords(chords)
+        self.show_chords_btn.config(state="normal" if fig is not None else "disabled")
+        self.analyze_btn.config(state="normal")
+
+    def _on_analysis_error(self, error: str) -> None:
+        self.analyze_btn.config(state="normal")
+        messagebox.showerror("Error en análisis", error)
 
     def _on_show_chords(self) -> None:
         if self._last_chords_fig is not None:
@@ -1436,22 +1930,33 @@ class AudioSeparatorApp:
         if not self.analysis_audio:
             messagebox.showwarning("Sin archivo", "Carga primero un WAV de guitarra.")
             return
+        audio = self.analysis_audio
         self.midi_btn.config(state="disabled")
-        self.root.update_idletasks()
+        self.midi_status_label.config(text="⏳ Generando MIDI en segundo plano…", foreground=DARK_INFO)
+        threading.Thread(target=self._midi_worker, args=(audio,), daemon=True,
+                         name="midi-worker").start()
+
+    def _midi_worker(self, audio: str) -> None:
         try:
-            path, msg = audio_to_midi(self.analysis_audio)
-            self.midi_status_label.config(text=msg, foreground="#2e7d32")
-            if path:
-                messagebox.showinfo(
-                    "MIDI generado", f"{msg}\n\nArchivo: {path}\n\n"
-                    "Compatible con TuxGuitar / Guitar Pro."
-                )
-        finally:
-            self.midi_btn.config(state="normal")
+            path, msg = audio_to_midi(audio)
+            self.message_queue.put(("midi_done", (path, msg)))
+        except Exception as exc:  # noqa: BLE001
+            self.message_queue.put(("midi_error", str(exc)))
+
+    def _on_midi_finished(self, result) -> None:
+        path, msg = result
+        self.midi_btn.config(state="normal")
+        self.midi_status_label.config(text=msg, foreground=DARK_SUCCESS if path else DARK_ERROR)
+        if path:
+            messagebox.showinfo("MIDI generado", f"{msg}\n\nArchivo: {path}")
+
+    def _on_midi_error(self, error: str) -> None:
+        self.midi_btn.config(state="normal")
+        self.midi_status_label.config(text=f"❌ {error}", foreground=DARK_ERROR)
+        messagebox.showerror("Transcripción MIDI", error)
 
     def _show_figure(self, fig) -> None:
-        import matplotlib
-        matplotlib.use("TkAgg")
+        # La figura se calcula en el worker y se incrusta aquí, en el hilo Tk.
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
         win = tk.Toplevel(self.root)
@@ -1468,18 +1973,39 @@ class AudioSeparatorApp:
             while True:
                 kind, payload = self.message_queue.get_nowait()
                 if kind == "status":
-                    self.status_label.config(text=str(payload), foreground="#1565c0")
+                    self.status_label.config(text=str(payload), foreground=DARK_INFO)
                 elif kind == "done":
-                    folder, files = payload  # type: ignore[misc]
-                    self._on_finished(str(folder), files)  # type: ignore[arg-type]
+                    folder, files, quality_report, recon = payload
+                    self._on_finished(str(folder), files, quality_report, recon)
                 elif kind == "error":
                     self._on_error(str(payload))
+                elif kind == "mix_done":
+                    self._on_mix_finished(str(payload))
+                elif kind == "mix_error":
+                    self._on_mix_error(str(payload))
+                elif kind == "analysis_done":
+                    self._on_analysis_finished(payload)
+                elif kind == "analysis_error":
+                    self._on_analysis_error(str(payload))
+                elif kind == "midi_done":
+                    self._on_midi_finished(payload)
+                elif kind == "midi_error":
+                    self._on_midi_error(str(payload))
+                elif kind == "special_status":
+                    kind_name, text = payload
+                    self.special_state[kind_name]["status"].config(text=str(text), foreground=DARK_INFO)
+                elif kind == "special_done":
+                    kind_name, folder, files = payload
+                    self._finish_special(kind_name, folder, files)
+                elif kind == "special_error":
+                    kind_name, error = payload
+                    self._error_special(kind_name, error)
         except queue.Empty:
             pass
         finally:
             self.root.after(120, self._poll_queue)
 
-    def _on_finished(self, folder: str, files) -> None:
+    def _on_finished(self, folder: str, files, report=None, recon=None) -> None:
         self.is_processing = False
         self.start_btn.config(state="normal")
         self.progress.stop()
@@ -1487,13 +2013,43 @@ class AudioSeparatorApp:
         more = "" if len(files) <= 6 else f"  (+{len(files) - 6} más)"
         self.status_label.config(
             text=f"✓ Separación completada — {len(files)} archivos: {names}{more}",
-            foreground="#2e7d32", wraplength=720,
+            foreground=DARK_SUCCESS, wraplength=720,
         )
+
+        # Política anti-stems falsos: guarda la calidad por pista y avisa de
+        # pistas casi silenciosas o de una reconstrucción incorrecta.
+        report = report or []
+        self.stem_quality = {r["path"]: r for r in report}
+        warnings: list[str] = []
+        silent = [r for r in report if r.get("silent")]
+        if silent:
+            names_s = ", ".join(Path(r["path"]).name for r in silent)
+            warnings.append(
+                "⚠ Pista(s) casi silenciosa(s) — el modelo no encontró señal:\n"
+                f"{names_s}\n\n"
+                "Se marcan como ⚠ en el mezclador. No son pistas reales; revisá "
+                "si el modelo elegido puede separar ese instrumento.\n\n"
+                + format_report(report)
+            )
+        if recon and recon.get("checked") and not recon.get("ok"):
+            warnings.append(
+                "⚠ La suma de stems NO reconstruye la mezcla original "
+                f"({recon.get('diff_db', 0):+.1f} dB).\n"
+                "Puede deberse a stems que no cubren la mezcla completa."
+            )
+        if warnings:
+            short = " · ".join(w.splitlines()[0].replace("⚠ ", "") for w in warnings)
+            self.status_label.config(
+                text=self.status_label.cget("text") + "\n⚠ " + short,
+                foreground="#ffb86b",
+            )
+            messagebox.showwarning("Aviso de calidad de stems", "\n\n".join(warnings))
+
         # Carga automática al multitrack y guitarra
         self._populate_mixer(folder, files)
         self._load_guitar_from_mixer()
-        # Cambia a la pestaña multitrack para que vea las pistas
-        self.notebook.select(1)
+        # Cambia a la pestaña multitrack (índice 3: 0 separador, 1 guitarras, 2 aire)
+        self.notebook.select(3)
         self._open_folder(folder)
 
     def _on_error(self, msg: str) -> None:
@@ -1502,7 +2058,7 @@ class AudioSeparatorApp:
         self.progress.stop()
         self.status_label.config(
             text="✗ Error durante la separación (ver diálogo).",
-            foreground="#c62828",
+            foreground=DARK_ERROR,
         )
         messagebox.showerror("Error en la separación", msg)
 

@@ -22,8 +22,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-import soundfile as sf
+try:
+    import numpy as np
+except Exception:  # noqa: BLE001
+    np = None  # type: ignore[assignment]
+try:
+    import soundfile as sf
+except Exception:  # noqa: BLE001
+    sf = None  # type: ignore[assignment]
 
 # (clave, etiqueta_UI, ayuda)
 MIDSIDE_PRESETS: list[tuple[str, str, str]] = [
@@ -70,6 +76,8 @@ def apply_midside_filter(
     """
     if mode not in _PRESET_GAINS:
         raise ValueError(f"Modo Mid/Side desconocido: {mode!r}")
+    if sf is None or np is None:
+        raise RuntimeError("Faltan numpy y soundfile para aplicar el filtro Mid/Side.")
 
     data, sr = sf.read(str(input_path), always_2d=True, dtype="float32")
     if data.shape[1] < 2:

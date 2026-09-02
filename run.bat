@@ -18,5 +18,5 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [OK] Iniciando con el venv del proyecto...
-".venv\Scripts\python.exe" main.py
+".venv\Scripts\python.exe" app.py
 pause

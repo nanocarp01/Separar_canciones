@@ -15,22 +15,33 @@ import logging
 import os
 import traceback
 
-import numpy as np
+try:
+    import numpy as np
+except Exception:  # noqa: BLE001
+    np = None  # type: ignore[assignment]
 
-# Backend headless (sin ventana, solo figuras para la web)
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
+# Backend headless para crear la figura en el worker; Tk la presenta después.
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+    import librosa.display
+except Exception:  # noqa: BLE001
+    matplotlib = None  # type: ignore[assignment]
+    plt = None  # type: ignore[assignment]
+    FuncFormatter = None  # type: ignore[assignment]
 
-import librosa
-import librosa.display
+try:
+    import librosa
+except Exception:  # noqa: BLE001
+    librosa = None  # type: ignore[assignment]
 
 logger = logging.getLogger("Guitarra")
 
 # Notas para la detección de acordes / afinación
 NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-E2_HZ = librosa.note_to_hz("E2")  # 82.41 Hz — cuerda más grave en afinación estándar
+E2_HZ = librosa.note_to_hz("E2") if librosa is not None else 82.41
 
 
 def _mmss(sec: float) -> str:
@@ -45,6 +56,8 @@ def _mmss(sec: float) -> str:
 def estimate_tuning(audio_path: str) -> str:
     """Estima la afinación detectando la frecuencia fundamental más grave."""
     try:
+        if librosa is None or np is None:
+            return "❌ Falta instalar librosa/numpy para analizar afinación."
         y, sr = librosa.load(audio_path, sr=22050, mono=True)
         if y.size < sr * 2:
             return "⚠️ Audio demasiado corto para estimar afinación."
@@ -111,6 +124,8 @@ def detect_chords(audio_path: str) -> tuple[str, object]:
     Devuelve ``(texto_markdown, figura_matplotlib_o_None)``.
     """
     try:
+        if librosa is None or np is None or plt is None:
+            return "❌ Faltan librosa, numpy o matplotlib para detectar acordes.", None
         y, sr = librosa.load(audio_path, sr=22050, mono=True)
         if y.size < sr * 2:
             return "⚠️ Audio demasiado corto para detectar acordes.", None

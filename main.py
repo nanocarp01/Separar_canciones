@@ -2,16 +2,20 @@
 """
 Demucs · RoFormer + Análisis de Guitarra — Audio Source Separator (Tkinter)
 
-Aplicación de escritorio organizada en **3 pestañas**:
+Aplicación de escritorio organizada en **5 pestañas**:
 
-  Tab 1 · 🎛️ Separador       — separa la canción en stems (Demucs 4/6 o
-                                RoFormer/MDXC) con GPU CUDA y fallback CPU.
-  Tab 2 · 🎚️ Multitrack     — carga automáticamente lo separado y permite
-                                reproducir, **silenciar (mute)**, **solo** y
-                                ajustar el **volumen** de cada pista, y
-                                generar una mezcla WAV.
-  Tab 3 · 🎸 Análisis        — estimación de **afinación**, **acordes** y
-                                transcripción **Audio → MIDI** (Basic Pitch).
+  🎛️ Separador Avanzado       — separa la canción en stems (Demucs 4/6 o
+                                 RoFormer/MDXC) con GPU CUDA y fallback CPU,
+                                 cadena de modelos especializados y filtro Mid/Side.
+  🎚️ Mezclador Multitrack     — carga lo separado; reproducir, mute, solo,
+                                 volumen por pista, master y exportar mezcla WAV.
+  🎸 Separación de Guitarras  — divide guitar.wav con métodos locales:
+                                 NMF (experimental), paneo estéreo (ADRess) o
+                                 lead por melodía (armónicos); o con un modelo
+                                 lead/rhythm del catálogo si existe.
+  🎺 Instrumentos de Aire     — aísla brass/woodwind/sax desde other.wav con
+                                 modelos del catálogo de audio-separator.
+  🎸 Análisis y Transcripción — afinación, acordes y Audio → MIDI (Basic Pitch).
 
 Toda la separación corre en un hilo secundario; la GUI nunca se congela.
 """
@@ -40,6 +44,12 @@ from guitar_analysis import (
 )
 from midside import MIDSIDE_PRESETS, apply_midside_filter
 from guitar_separation import separate_guitars_experimental
+from guitar_dsp import separate_guitars_by_panning, separate_lead_by_melody
+
+# Métodos locales DSP de la pestaña de guitarras (además del NMF existente).
+GUITAR_METHOD_PAN = "Paneo estéreo (ADRess)"
+GUITAR_METHOD_MELODY = "Lead por melodía (armónicos)"
+GUITAR_DSP_METHODS = (GUITAR_METHOD_PAN, GUITAR_METHOD_MELODY)
 from model_manifest import (
     is_registered,
     manifest_mode,
@@ -370,14 +380,14 @@ class AudioSeparatorApp:
             font=self._f_sub, foreground=DARK_MUTED,
         ).pack(anchor="w")
 
-        # Notebook con las 3 pestañas
+        # Notebook con las 5 pestañas (el Multitrack va en la posición 2)
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(4, 0))
 
         self._build_separar_tab()
+        self._build_multitrack_tab()
         self._build_guitars_tab()
         self._build_air_tab()
-        self._build_multitrack_tab()
         self._build_guitarra_tab()
 
         # Footer
@@ -494,6 +504,8 @@ class AudioSeparatorApp:
         self.guitar_method_var = tk.StringVar(value="NMF + análisis de notas (experimental)")
         ttk.Combobox(method_box, textvariable=self.guitar_method_var,
                      values=["NMF + análisis de notas (experimental)",
+                             GUITAR_METHOD_PAN,
+                             GUITAR_METHOD_MELODY,
                              "Modelo especializado del catálogo"],
                      state="readonly", width=48).pack(side="left")
         ttk.Label(method_box, text="Componentes:").pack(side="left", padx=(16, 6))
@@ -501,12 +513,28 @@ class AudioSeparatorApp:
         ttk.Combobox(method_box, textvariable=self.guitar_components_var,
                      values=["8", "12", "16", "24", "32"],
                      state="readonly", width=6).pack(side="left")
+        ttk.Label(method_box, text="Sensibilidad lead:").pack(side="left", padx=(16, 6))
+        self.guitar_sensitivity_var = tk.StringVar(value="Media")
+        ttk.Combobox(method_box, textvariable=self.guitar_sensitivity_var,
+                     values=["Baja", "Media", "Alta"],
+                     state="readonly", width=7).pack(side="left")
         state["model_combo"].config(state="disabled")
         state["hint"].config(text="Método experimental activo: no requiere modelo descargado.")
         self.guitar_method_var.trace_add("write", lambda *_: self._toggle_guitar_method())
 
     def _toggle_guitar_method(self) -> None:
         state = self.special_state["guitar"]
+        method = self.guitar_method_var.get() if self.guitar_method_var is not None else ""
+        if method in GUITAR_DSP_METHODS:
+            state["model_combo"].config(state="disabled")
+            state["hint"].config(text=(
+                "Paneo: separa guitarras ubicadas en lados distintos del estéreo "
+                "(guitar_pan_izq/der/centro.wav). Requiere audio estéreo."
+                if method == GUITAR_METHOD_PAN else
+                "Melodía: detecta las secciones con solo/arreglos y extrae la línea lead a "
+                "guitar_lead.wav; el resto va a guitar_rhythm.wav. Sensibilidad Alta = más lead "
+                "(puede colarse rasgueo); Baja = solo lo más claro."))
+            return
         experimental = self.guitar_method_var is not None and self.guitar_method_var.get().startswith("NMF")
         state["model_combo"].config(state="disabled" if experimental else "readonly")
         if experimental:
@@ -577,7 +605,10 @@ class AudioSeparatorApp:
             messagebox.showwarning("Sin fuente", "Carga o busca primero el stem fuente.")
             return
         experimental = kind == "guitar" and self.guitar_method_var is not None and self.guitar_method_var.get().startswith("NMF")
-        if not experimental and (not model or model.startswith("No ") or "no disponible" in model.lower()):
+        dsp_method = (self.guitar_method_var.get()
+                      if kind == "guitar" and self.guitar_method_var is not None
+                      and self.guitar_method_var.get() in GUITAR_DSP_METHODS else None)
+        if not experimental and not dsp_method and (not model or model.startswith("No ") or "no disponible" in model.lower()):
             messagebox.showwarning("Sin modelo", "No hay un modelo especializado compatible disponible.")
             return
         if state["running"]:
@@ -587,8 +618,14 @@ class AudioSeparatorApp:
         state["running"] = True
         state["start"].config(state="disabled")
         state["progress"].start(15)
-        state["status"].config(text=f"Procesando {Path(source).name} con {model}…", foreground=DARK_INFO)
-        if experimental:
+        state["status"].config(text=f"Procesando {Path(source).name} con {dsp_method or model}…",
+                               foreground=DARK_INFO)
+        if dsp_method:
+            sensitivity = self.guitar_sensitivity_var.get().lower()
+            threading.Thread(target=self._guitar_dsp_worker,
+                             args=(source, output_dir, dsp_method, sensitivity), daemon=True,
+                             name="guitar-dsp-worker").start()
+        elif experimental:
             components = int(self.guitar_components_var.get()) if self.guitar_components_var else 16
             threading.Thread(target=self._guitar_experimental_worker,
                              args=(source, output_dir, components), daemon=True,
@@ -603,6 +640,19 @@ class AudioSeparatorApp:
                 source, output_dir, n_components=components,
                 progress=lambda text: self.message_queue.put(("special_status", ("guitar", text))),
             )
+            self.message_queue.put(("special_done", ("guitar", str(output_dir), files)))
+        except Exception as exc:
+            self.message_queue.put(("special_error", ("guitar", str(exc))))
+
+    def _guitar_dsp_worker(self, source: str, output_dir: Path, method: str,
+                           sensitivity: str = "media") -> None:
+        progress = lambda text: self.message_queue.put(("special_status", ("guitar", text)))  # noqa: E731
+        try:
+            if method == GUITAR_METHOD_PAN:
+                files = separate_guitars_by_panning(source, output_dir, progress=progress)
+            else:
+                files = separate_lead_by_melody(source, output_dir, sensitivity=sensitivity,
+                                                progress=progress)
             self.message_queue.put(("special_done", ("guitar", str(output_dir), files)))
         except Exception as exc:
             self.message_queue.put(("special_error", ("guitar", str(exc))))
@@ -810,7 +860,7 @@ class AudioSeparatorApp:
     # ------------------------------------------------ Tab 3 · Análisis
     def _build_guitarra_tab(self) -> None:
         tab = ttk.Frame(self.notebook)
-        self.notebook.add(tab, text="🎸  3 · Análisis y Transcripción")
+        self.notebook.add(tab, text="🎸  Análisis y Transcripción")
 
         row = ttk.Frame(tab)
         row.pack(fill="x", padx=12, pady=(12, 4))
@@ -1957,14 +2007,47 @@ class AudioSeparatorApp:
 
     def _show_figure(self, fig) -> None:
         # La figura se calcula en el worker y se incrusta aquí, en el hilo Tk.
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        # La figura es más ancha que la pantalla: va dentro de un Canvas Tk con
+        # scroll horizontal (barra, rueda del mouse) y la barra de matplotlib.
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
         win = tk.Toplevel(self.root)
         win.title("🎸 Línea de tiempo de acordes")
-        canvas = FigureCanvasTkAgg(fig, master=win)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
-        ttk.Button(win, text="Cerrar", command=win.destroy).pack(pady=6)
+        win.configure(bg=DARK_BG)
+        fig_w = int(fig.get_figwidth() * fig.dpi)
+        fig_h = int(fig.get_figheight() * fig.dpi)
+        screen_w = max(800, win.winfo_screenwidth() - 120)
+        win.geometry(f"{min(fig_w + 20, screen_w)}x{fig_h + 110}")
+
+        bottom = ttk.Frame(win)
+        bottom.pack(side="bottom", fill="x")
+        ttk.Button(bottom, text="Cerrar", command=win.destroy).pack(side="right", padx=8, pady=6)
+        ttk.Label(bottom, text="Rueda del mouse o barra para desplazarte en el tiempo.",
+                  foreground=DARK_MUTED).pack(side="left", padx=8)
+
+        scroller = tk.Canvas(win, bg=DARK_BG, highlightthickness=0, height=fig_h)
+        xbar = ttk.Scrollbar(win, orient="horizontal", command=scroller.xview)
+        scroller.configure(xscrollcommand=xbar.set)
+
+        fig_canvas = FigureCanvasTkAgg(fig, master=scroller)
+        fig_canvas.draw()
+        widget = fig_canvas.get_tk_widget()
+        scroller.create_window(0, 0, window=widget, anchor="nw")
+        scroller.configure(scrollregion=(0, 0, fig_w, fig_h))
+
+        toolbar = NavigationToolbar2Tk(fig_canvas, win, pack_toolbar=False)
+        toolbar.update()
+        toolbar.pack(side="top", fill="x")
+        xbar.pack(side="bottom", fill="x")
+        scroller.pack(side="top", fill="both", expand=True)
+
+        def _scroll(event) -> str:
+            scroller.xview_scroll(-1 if event.delta > 0 else 1, "units")
+            return "break"
+
+        for target in (scroller, widget):
+            target.bind("<MouseWheel>", _scroll)
+            target.bind("<Shift-MouseWheel>", _scroll)
 
     # ------------------------------------------------------- Cola UI
 
@@ -2048,8 +2131,8 @@ class AudioSeparatorApp:
         # Carga automática al multitrack y guitarra
         self._populate_mixer(folder, files)
         self._load_guitar_from_mixer()
-        # Cambia a la pestaña multitrack (índice 3: 0 separador, 1 guitarras, 2 aire)
-        self.notebook.select(3)
+        # Cambia a la pestaña multitrack (índice 1: 0 separador, 1 multitrack)
+        self.notebook.select(1)
         self._open_folder(folder)
 
     def _on_error(self, msg: str) -> None:

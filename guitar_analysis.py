@@ -25,6 +25,8 @@ try:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import matplotlib.patches  # noqa: F401  (usado en _chord_figure)
+    import matplotlib.ticker  # noqa: F401
     from matplotlib.ticker import FuncFormatter
     import librosa.display
 except Exception:  # noqa: BLE001
@@ -118,6 +120,60 @@ def _chord_templates() -> dict[str, np.ndarray]:
     return templates
 
 
+# Colores del tema oscuro de la app (main.py)
+_FIG_BG = "#1e1e2e"
+_FIG_PANEL = "#27273a"
+_FIG_TEXT = "#f5f5f5"
+_FIG_MUTED = "#b7b7c9"
+_FIG_ACCENTS = ("#7c3aed", "#2563eb")
+# Ancho de la figura por segundo de audio (la ventana tiene scroll horizontal).
+_INCHES_PER_SECOND = 0.6
+
+
+def _chord_figure(beat_chroma, edges, segments):
+    """Figura ancha: franja de acordes arriba y mapa cromático abajo."""
+    duration = float(edges[-1]) if len(edges) else 1.0
+    width = max(14.0, duration * _INCHES_PER_SECOND)
+    fig, (ax_ch, ax) = plt.subplots(
+        2, 1, figsize=(width, 4.6), sharex=True,
+        gridspec_kw={"height_ratios": [1, 3], "hspace": 0.05},
+    )
+    fig.patch.set_facecolor(_FIG_BG)
+
+    # Franja de acordes: bloques alternando color y altura para que no se pisen.
+    ax_ch.set_facecolor(_FIG_PANEL)
+    ax_ch.set_ylim(0, 2)
+    ax_ch.set_yticks([])
+    min_label_s = 0.45  # tramos más cortos no llevan texto
+    for i, (t0, t1, ch) in enumerate(segments):
+        row = i % 2
+        ax_ch.add_patch(matplotlib.patches.Rectangle(
+            (t0, row + 0.08), t1 - t0, 0.84, facecolor=_FIG_ACCENTS[row],
+            edgecolor=_FIG_BG, linewidth=1.0))
+        if t1 - t0 >= min_label_s:
+            ax_ch.text((t0 + t1) / 2, row + 0.5, ch, ha="center", va="center",
+                       fontsize=10, fontweight="bold", color="white", clip_on=True)
+    for spine in ax_ch.spines.values():
+        spine.set_visible(False)
+    ax_ch.set_title("Línea de tiempo de acordes", color=_FIG_TEXT, loc="left", fontsize=12)
+
+    ax.pcolormesh(edges, np.arange(13), beat_chroma, cmap="magma",
+                  vmin=0.0, vmax=1.0, shading="flat")
+    ax.set_yticks(np.arange(12) + 0.5)
+    ax.set_yticklabels(NOTES)
+    ax.set_facecolor(_FIG_BG)
+    ax.set_xlim(0, duration)
+    ax.set_xlabel("Tiempo", color=_FIG_MUTED)
+    ax.set_ylabel("Nota", color=_FIG_MUTED)
+    ax.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(5))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda s, _: _mmss(s)))
+    ax.tick_params(colors=_FIG_MUTED, labelbottom=True)
+    for spine in ax.spines.values():
+        spine.set_color(_FIG_PANEL)
+    fig.subplots_adjust(left=0.6 / width, right=1 - 0.2 / width, top=0.9, bottom=0.14)
+    return fig
+
+
 def detect_chords(audio_path: str) -> tuple[str, object]:
     """Detecta una línea de tiempo de acordes.
 
@@ -134,49 +190,72 @@ def detect_chords(audio_path: str) -> tuple[str, object]:
         chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop)
         n_frames = chroma.shape[1]
 
-        # Segmentación por pulsos (beats). Se acotan/limpian SIEMPRE a índices
-        # de frame válidos (enteros, únicos, crecientes y < n_frames) para que
-        # librosa.util.sync y el bucle de abajo nunca fallen por desborde.
+        # Segmentación por pulsos (beats). `fix_frames` deja los límites
+        # enteros, únicos, crecientes y agrega 0 y n_frames en los extremos,
+        # así cada columna sincronizada j abarca [bounds[j], bounds[j+1]).
         _, beats = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop)
         beats = np.asarray(beats)
-        if beats.size < 2:
-            beats = np.arange(0, n_frames, max(1, n_frames // 40))
-        beats = np.unique(np.round(beats).astype(int))
-        beats = beats[(beats >= 0) & (beats < n_frames)]
         if beats.size < 2:  # último recurso: cortes uniformes
-            beats = np.unique(np.linspace(0, max(n_frames - 1, 1), num=40).astype(int))
-
-        # `librosa.util.sync` con pad=True agrega UNA columna extra al final
-        # (el tramo entre el último beat y el final del audio), así que el
-        # resultado tiene len(beats)+1 columnas. Alineamos `times` agregando
-        # el frame final para que ambas tengan la misma longitud; de lo
-        # contrario, con ciertos audios el bucle de abajo intenta acceder a
-        # times[len(labels)] y lanza IndexError (out of bounds).
-        beat_chroma = librosa.util.sync(chroma, beats, aggregate=np.median)
-        times = librosa.frames_to_time(
-            np.append(beats, n_frames), sr=sr, hop_length=hop
-        )
+            beats = np.linspace(0, max(n_frames - 1, 1), num=40)
+        bounds = librosa.util.fix_frames(np.round(beats).astype(int), x_min=0, x_max=n_frames)
+        beat_chroma = librosa.util.sync(chroma, bounds, aggregate=np.median, pad=False)
+        edges = librosa.frames_to_time(bounds, sr=sr, hop_length=hop)  # len = columnas + 1
+        n = beat_chroma.shape[1]
+        edges = edges[: n + 1]
 
         # Correlación con plantillas normalizadas
         templates = _chord_templates()
         names = list(templates.keys())
-        T = np.stack([templates[n] for n in names]).astype(float)
+        T = np.stack([templates[k] for k in names]).astype(float)
         T = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-9)
         C = beat_chroma / (np.linalg.norm(beat_chroma, axis=0, keepdims=True) + 1e-9)
         scores = T @ C
-        labels = [names[i] for i in np.argmax(scores, axis=0)]
 
-        # Fusiona acordes consecutivos iguales en secciones (índices seguros)
-        n = len(labels)
-        segments, start = [], 0
-        for i in range(1, n + 1):
-            if i == n or labels[i] != labels[start]:
-                t0 = times[min(start, n - 1)]
-                t1 = times[min(i - 1, n - 1)]
-                if i - 1 <= start:
-                    t1 = t0 + 1.0
-                segments.append((t0, max(t0 + 1.0, t1), labels[start]))
-                start = i
+        # Suavizado: promedio de puntajes en una ventana de 3 pulsos, para no
+        # cambiar de acorde en cada pulso por ruido.
+        kernel = np.ones(3) / 3.0
+        smooth = np.apply_along_axis(lambda r: np.convolve(r, kernel, mode="same"), 1, scores)
+        idx = list(np.argmax(smooth, axis=0))
+
+        # Pulsos en silencio (el croma normalizado del silencio es ruido): sin acorde.
+        rms = librosa.feature.rms(y=y, hop_length=hop)
+        beat_rms = librosa.util.sync(rms, bounds, aggregate=np.mean, pad=False)[0][:n]
+        silent = beat_rms < (beat_rms.max() + 1e-12) * 10 ** (-40 / 20)
+        for j in np.flatnonzero(silent):
+            idx[j] = -1
+        beat_chroma = beat_chroma * (~silent)[None, :]
+
+        # Duración mínima: tramos de 1 pulso se absorben en el acorde vecino
+        # con mejor puntaje en ese pulso.
+        def runs(seq):
+            out, start = [], 0
+            for i in range(1, len(seq) + 1):
+                if i == len(seq) or seq[i] != seq[start]:
+                    out.append((start, i))
+                    start = i
+            return out
+
+        min_beats = 2
+        changed = True
+        while changed:
+            changed = False
+            for start, end in runs(idx):
+                if idx[start] == -1 or end - start >= min_beats or len(idx) <= min_beats:
+                    continue
+                left = idx[start - 1] if start > 0 else None
+                right = idx[end] if end < len(idx) else None
+                options = [c for c in (left, right) if c is not None and c != -1]
+                if not options:
+                    continue
+                best = max(options, key=lambda c: smooth[c, start:end].sum())
+                idx[start:end] = [best] * (end - start)
+                changed = True
+                break
+
+        segments = [(float(edges[s]), float(edges[e]), names[idx[s]])
+                    for s, e in runs(idx) if idx[s] != -1]
+        if not segments:
+            return "⚠️ No se detectó señal suficiente para reconocer acordes.", None
 
         text = "🎸 **Progresión de acordes detectada** — " \
                f"{len(segments)} sección(es):\n\n" + "\n".join(
@@ -184,21 +263,7 @@ def detect_chords(audio_path: str) -> tuple[str, object]:
                    for t0, t1, ch in segments
                )
 
-        # Figura: mapa cromático + etiquetas de acorde
-        fig, ax = plt.subplots(figsize=(14, 3.6))
-        librosa.display.specshow(
-            beat_chroma, x_coords=times, y_axis="chroma",
-            ax=ax, cmap="magma", vmin=0.0, vmax=1.0,
-        )
-        for t0, t1, ch in segments:
-            ax.text(
-                (t0 + t1) / 2, 11.6, ch, ha="center", va="bottom",
-                fontsize=11, fontweight="bold", color="white",
-                bbox=dict(boxstyle="round,pad=0.25", fc="#7c3aed", ec="none", alpha=0.9),
-            )
-        ax.set_title("Mapa cromático por pulso (línea de tiempo de acordes)")
-        ax.xaxis.set_major_formatter(FuncFormatter(lambda s, _: _mmss(s)))
-        fig.tight_layout()
+        fig = _chord_figure(beat_chroma, edges, segments)
         return text, fig
 
     except Exception as exc:  # noqa: BLE001
